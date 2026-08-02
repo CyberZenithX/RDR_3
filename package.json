@@ -1,0 +1,17 @@
+{
+  "name": "dust-and-iron",
+  "version": "0.1.0",
+  "description": "Dust & Iron — third-person western open-world, three.js, no build step",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "npx serve .",
+    "smoke": "node scripts/smoke.mjs",
+    "verify": "node scripts/verify-models.mjs"
+  },
+  "license": "ISC",
+  "devDependencies": {
+    "@gltf-transform/core": "^4.4.2",
+    "playwright": "^1.62.1"
+  }
+}
