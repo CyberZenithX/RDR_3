@@ -270,6 +270,21 @@ group names. Highlights a later round will specifically reach for:
 
 ## Known rough edges and deliberate shortcuts
 
+- **Fixed post-round-1: "click to play" did nothing.** `input.js` bound the
+  pointer-lock click listener to `canvas` only, but `#clickToPlay` sits on top
+  of the canvas in paint order (later in the DOM) with `pointer-events: auto`
+  in `index.html`'s CSS — so the overlay, not the canvas, received every click,
+  and `canvas.requestPointerLock()` was never called. Fixed by binding the
+  listener to `document` instead, so it fires regardless of which element (the
+  overlay or the canvas underneath it) the click actually landed on. Verified
+  the routing via a synthetic `.click()` in a live page: it now correctly
+  attempts `requestPointerLock()` and gets a `pointerlockerror` back (expected —
+  synthetic clicks aren't a trusted user gesture; a real mouse click will lock
+  normally). **If any future round adds more overlay UI that should intercept
+  clicks without triggering pointer lock** (a pause menu button, say), this
+  document-level listener will need a guard (e.g. check `e.target` isn't
+  inside that UI) — it currently assumes any click anywhere means "start
+  playing."
 - **Mouse-look direction was reasoned through analytically, not seen rendered.**
   I have no way to view the WebGL canvas in this environment (screenshots come
   back "Browser pane is not displayed, so the page is not compositing frames" —

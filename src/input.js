@@ -32,7 +32,12 @@ export function initInput(canvas) {
   addEventListener('keyup', onKeyUp);
   addEventListener('mousemove', onMouseMove);
   document.addEventListener('pointerlockchange', () => onPointerLockChange(canvas));
-  canvas.addEventListener('click', () => {
+  // Listen on document, not canvas: the #clickToPlay overlay sits visually on
+  // top of the canvas (later in the DOM, pointer-events: auto in index.html)
+  // precisely while the pointer is unlocked, so it — not the canvas — is what
+  // actually receives the click. Binding only to canvas meant the "click to
+  // play" prompt was never clickable.
+  document.addEventListener('click', () => {
     if (!locked) canvas.requestPointerLock();
   });
 }
