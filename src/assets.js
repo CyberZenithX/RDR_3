@@ -41,8 +41,21 @@ export function findClip(gltf, ...candidates) {
   return null;
 }
 
-/** World-space bounding-box height of a loaded object, used to rescale to PLAYER.modelHeight. */
+/**
+ * World-space bounding-box height of a loaded object, used to rescale to
+ * PLAYER.modelHeight. `updateMatrixWorld(true)` is required here, not
+ * optional: a freshly-loaded GLTFLoader scene hasn't been added to a Scene or
+ * rendered yet, so its matrixWorld chain is stale. Box3.setFromObject does
+ * its own partial internal updates while traversing, but for this rig's
+ * shape (13 SkinnedMesh primitives under sibling armature/mesh branches, one
+ * of them carrying a baked 90° corrective rotation) that partial update is
+ * not reliable — measured directly: without the explicit pre-update this
+ * returned 63.8 for player.glb instead of the correct ~1.83, which made
+ * character.js compute a scale of 0.029 instead of ~0.99 and render the
+ * player at roughly 5cm tall. Confirmed by forcing a full cascade first.
+ */
 export function measureHeight(object3D) {
+  object3D.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(object3D);
   return box.max.y - box.min.y;
 }

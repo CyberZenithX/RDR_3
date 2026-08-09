@@ -270,28 +270,52 @@ group names. Highlights a later round will specifically reach for:
 
 ## Known rough edges and deliberate shortcuts
 
-- **Fixed post-round-1: grass rendered near-black and could hide the player.**
-  From a real screenshot: grass blades looked like dark spikes instead of the
-  intended olive/tan gradient, and no player character was visible in the
-  third-person view at all. Two separate causes, both fixed:
+- **Fixed post-round-1, the real one: the player character was rendering at
+  ~5cm tall.** Two rounds of screenshots from the human both showed no visible
+  character in the third-person view. First pass (grass near-black, no
+  player-keepout on grass) turned out to be a real but minor issue — fixed,
+  see below — but didn't explain the missing character. Chased it with direct
+  in-browser diagnostics (Playwright scripts dumping live `Box3`/matrix state,
+  not guessing) and found the actual cause: `assets.js`'s `measureHeight()`
+  called `Box3().setFromObject()` on a **freshly-loaded GLTF scene that had
+  never been added to a `Scene` or rendered** — its `matrixWorld` chain was
+  stale, and `Box3.setFromObject`'s own internal per-node updates aren't
+  sufficient to fix that for this rig's shape (13 `SkinnedMesh` primitives —
+  see below — under sibling armature/mesh branches, one of them carrying a
+  baked 90° corrective rotation). Measured directly: without an explicit
+  update this returned **63.8** for `player.glb` instead of the correct
+  **~1.83**. `character.js` then computed `scale = 1.85 / 63.8 ≈ 0.029`
+  instead of `≈ 0.99`, rendering the player at roughly 5cm tall — invisible
+  from the normal ~5-unit third-person camera distance. The "verification"
+  reading I did after the first fix attempt used the *same* buggy method and
+  falsely confirmed 1.85m — a broken ruler agreeing with itself twice is not
+  a working ruler. **Fix**: `measureHeight()` now calls
+  `object3D.updateMatrixWorld(true)` before measuring (`src/assets.js`).
+  Re-verified end to end: `characterScale` is now `1.009`,
+  `characterWorldBBoxHeight` is a truthfully-correct `1.85`. Added a smoke
+  check (`scripts/smoke.mjs`, "player character rendered at a plausible human
+  scale") asserting `characterScale` stays within `[0.3, 3]` so this exact
+  class of bug can't silently recur. **If any future round loads another GLB
+  and measures it (bandit, horse — round 2/4), route it through this same
+  `measureHeight()`, don't reimplement bounding-box measurement.**
+- **Also fixed: grass rendered near-black, and had no player keep-out.**
+  Real, minor issues found from the same screenshots, not the cause of the
+  missing character above, but worth keeping fixed:
   - Grass blades are flat single-triangle cards. A blade whose face normal
     points away from the sun gets zero direct light, and relied on the
     hemisphere light alone — which read as near-black in practice. Fixed with
     `GRASS.ambientFloor` (0.16), a small constant `emissive` on the grass
-    material (see `grass.js`'s `buildGrass`) so backlit blades stay legible
-    as dark grass instead of washing to black. Also lightened
-    `COLORS.grassRoot`/`grassTip` slightly.
+    material (`grass.js`'s `buildGrass`), plus lightened
+    `COLORS.grassRoot`/`grassTip`.
   - Grass had no keep-out around the player's own (continuously-updating)
     position, so it could spawn right on top of/immediately behind the
-    character and block the third-person camera's line of sight to it. Fixed
-    with `GRASS.playerKeepOut` (1.4 units) in `recenterGrass()`'s placement
-    loop. Verified programmatically (not visually — see below) by calling
-    `buildGrass`/`updateGrass` directly against a fake scene and checking the
-    closest placed instance is outside the keep-out radius.
-  **Still not visually confirmed** — I have no way to see the rendered canvas
-  in this environment (see next item). If grass still reads too dark or the
-  character is still hard to see, the next lever is `SUN.hemiIntensity` or
-  `GRASS.ambientFloor` itself, not a redesign.
+    character. Fixed with `GRASS.playerKeepOut` (1.4 units) in
+    `recenterGrass()`. Verified programmatically (module-level test against a
+    fake scene), not visually.
+  Neither of these has been visually re-confirmed after the character-scale
+  fix above — the human should check both on the next look, since a correctly
+  sized character standing in grass is a genuinely different scene than what
+  either screenshot showed.
 - **I cannot get a screenshot of this game in this environment.** The
   Browser-preview tool's `computer{action:"screenshot"}` fails with "the
   Browser pane is not displayed, so the page is not compositing frames" — a
@@ -366,12 +390,16 @@ group names. Highlights a later round will specifically reach for:
 ## What the next round (2 — the horse) should watch out for
 
 1. **`horse.glb`'s rest-pose bounding box is 4.8m tall, 5.7m long — not
-   horse-sized.** See "Models — inventory" above. Don't call `measureHeight()`
-   on it and trust the result the way `character.js` does for the player.
-   Investigate why (posed rest frame?) before picking a scale factor, or
-   sanity-check against a known real-world horse height (~1.6m at the withers)
-   and hardcode+comment the scale in `config.js` if the bounding box keeps
-   lying.
+   horse-sized.** See "Models — inventory" above. That number came from
+   `gltf-transform`'s static analysis and is unrelated to the
+   `measureHeight()` matrixWorld bug fixed this round (see "known rough
+   edges") — `measureHeight()` is now trustworthy (verified: gives 1.83–1.85
+   for `player.glb`, matching reality), so if the horse still measures ~4.8m
+   through it, that's a genuine property of the asset's rest pose, not a
+   measurement bug. Investigate why (posed rest frame?) before picking a
+   scale factor, or sanity-check against a known real-world horse height
+   (~1.6m at the withers) and hardcode+comment the scale in `config.js` if
+   the bounding box keeps lying.
 2. **Reuse `src/assets.js`** (`loadGLTF`, `findClip`, `measureHeight`,
    `enableShadows`) and follow `character.js`'s shape (`{root, height,
    setLocomotion, update}` interface, placeholder fallback) for the horse

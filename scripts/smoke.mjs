@@ -109,6 +109,25 @@ const CHECKS = [
     const bad = Object.entries(counts).filter(([, n]) => !(n > 0));
     return bad.length === 0 ? null : `zero-count prop kinds: ${bad.map(([k]) => k).join(', ')}`;
   }],
+  ['player character rendered at a plausible human scale', async () => {
+    // Regression guard for a real bug: measureHeight() on a freshly-loaded,
+    // not-yet-updated GLTF scene returned a garbage bounding box (63.8
+    // instead of ~1.83), so character.js computed scale = 1.85/63.8 = 0.029
+    // and rendered the player at ~5cm tall — invisible from the normal
+    // camera distance. Fixed in assets.js's measureHeight() by forcing
+    // updateMatrixWorld(true) before measuring. This check would have
+    // caught it: a real human character's root scale should be within a
+    // sane band of 1 (the model is already close to real-world scale before
+    // any rescale), not two orders of magnitude off.
+    const scale = await page.evaluate(() => window.__debug?.characterScale);
+    const bboxHeight = await page.evaluate(() => window.__debug?.characterWorldBBoxHeight);
+    if (typeof scale !== 'number' || typeof bboxHeight !== 'number') {
+      return `characterScale/characterWorldBBoxHeight missing (${scale}, ${bboxHeight})`;
+    }
+    if (scale < 0.3 || scale > 3) return `characterScale is ${scale} — model rescale looks broken`;
+    if (bboxHeight < 1.2 || bboxHeight > 2.5) return `characterWorldBBoxHeight is ${bboxHeight}m — not human-sized`;
+    return null;
+  }],
 ];
 
 for (const [label, fn] of CHECKS) {

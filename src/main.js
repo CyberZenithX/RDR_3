@@ -42,6 +42,9 @@ async function init() {
   const character = await createPlayerCharacter();
   window.__debug.modelsLoaded.player = !character.isPlaceholder;
   scene.add(character.root);
+  window.__debug.characterScale = character.root.scale.x;
+  character.root.updateMatrixWorld(true);
+  window.__debug.characterWorldBBoxHeight = new THREE.Box3().setFromObject(character.root).getSize(new THREE.Vector3()).y;
 
   const player = new Player(character, world);
   const tpCamera = new ThirdPersonCamera(camera);
@@ -68,6 +71,11 @@ async function init() {
     window.__frames++;
     window.__debug.playerY = player.position.y;
     window.__debug.grounded = player.grounded;
+    window.__debug.playerPos = { x: player.position.x, y: player.position.y, z: player.position.z };
+    window.__debug.cameraPos = { x: camera.position.x, y: camera.position.y, z: camera.position.z };
+    window.__debug.cameraDistanceToPlayer = camera.position.distanceTo(player.position);
+    window.__debug.cameraCurrentDistance = tpCamera.currentDistance;
+    window.__debug.cameraFov = camera.fov;
   });
 }
 
