@@ -153,9 +153,10 @@ export const PLAYER = {
   airControl: 0.3,
   turnRate: 13, // rad/s the mesh yaws toward its movement direction
   // Radians added to the mesh's facing so its modelled -Z axis lines up with
-  // its movement direction. Nudge by Math.PI here (not in code) if a loaded
-  // model turns out to face +Z instead — untested against the real render.
-  meshYawOffset: 0,
+  // its movement direction. Confirmed from a real screenshot: the loaded
+  // player.glb faces +Z, not -Z, so it rendered backwards (facing the camera
+  // instead of away from it). Math.PI flips it.
+  meshYawOffset: Math.PI,
   gravity: -22,
   jumpSpeed: 7.2,
   groundSnap: 0.35, // distance below the feet that still counts as grounded

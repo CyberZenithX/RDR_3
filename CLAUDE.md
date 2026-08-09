@@ -351,10 +351,23 @@ group names. Highlights a later round will specifically reach for:
   cheap to get backwards and expensive to debug blind.** First thing to check by
   hand-testing. If it's inverted, the fix is `this.yaw += d.x * ...` instead of
   `-=` in `camera.js`'s `handleLook()` — one sign flip, not a redesign.
-- **Player mesh facing direction is likewise unverified.** If the character
-  walks backwards relative to where they're facing, set
-  `PLAYER.meshYawOffset = Math.PI` in `config.js`. One line, see the comment
-  there.
+- **Fixed post-round-1: player mesh faced the camera instead of away from
+  it.** Confirmed from a real screenshot — the character was walking/facing
+  backwards relative to its movement direction. This was the exact
+  `PLAYER.meshYawOffset` escape hatch flagged (but untested) at the end of
+  round 1. Set to `Math.PI` in `config.js`; both call sites that apply it
+  (`player.js`'s constructor spawn-facing line and the movement-direction
+  `targetYaw` calculation) add the same constant, so this flips the mesh
+  consistently everywhere, not just on spawn. Not re-verified visually (see
+  "I cannot get a screenshot" above) but the math is unambiguous here — no
+  further lever if it's somehow still wrong, just double-check the sign.
+- **Jump has no dedicated animation — this is intentional, not a gap.** Asked
+  about by the human after the mesh-facing fix. Per BUILD-PLAN.md's clip
+  table, only `Idle`/`Walk`/`Run`/`Shoot`/`Reload`/`Hit`/`Death` need a
+  real-or-faked clip; jump isn't in that list and the asset pack has no jump
+  clip anyway. See "no dedicated jump animation" further down — airborne, the
+  last locomotion clip keeps playing at a slowed `timeScale`
+  (`ANIM.airTimeScale`). Not a round-1 shortfall; nothing to fix here.
 - **Headless smoke runs slow — this is the test environment, not the game.**
   `scripts/smoke.mjs` measured ~3fps in headless chromium's software rasterizer
   with the full 2048 `PCFSoftShadowMap` on. Real GPUs handle 2048 soft shadows
