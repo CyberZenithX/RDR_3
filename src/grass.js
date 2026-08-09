@@ -61,7 +61,18 @@ function isGrassValidSpot(x, z) {
 /** Builds the grass instance pool (empty until the first updateGrass call) and adds it to `scene`. */
 export function buildGrass(scene) {
   const geo = makeTuftGeometry();
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.85 });
+  const mat = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    side: THREE.DoubleSide,
+    roughness: 0.85,
+    // Flat single-triangle blades go nearly black when their face normal points
+    // away from the sun (only the hemisphere light reaches them, and thin
+    // foliage cards read badly with zero direct light). A small constant
+    // emissive keeps backlit blades legible as dark grass instead of black
+    // spikes, without touching the vertex-color gradient other angles show.
+    emissive: new THREE.Color(COLORS.grassRoot),
+    emissiveIntensity: GRASS.ambientFloor,
+  });
   const mesh = new THREE.InstancedMesh(geo, mat, GRASS.count);
   mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   mesh.frustumCulled = false; // instances span a moving radius around the player; cull per-frame cost isn't worth it here
@@ -90,7 +101,7 @@ function recenterGrass(state, playerPos) {
       const x = ci * spacing + spacing / 2 + (hash01(ci, cj, 1) - 0.5) * spacing;
       const z = cj * spacing + spacing / 2 + (hash01(ci, cj, 2) - 0.5) * spacing;
       const dist = Math.hypot(x - playerPos.x, z - playerPos.z);
-      if (dist > GRASS.radius || !isGrassValidSpot(x, z)) continue;
+      if (dist > GRASS.radius || dist < GRASS.playerKeepOut || !isGrassValidSpot(x, z)) continue;
 
       let keepProb = Math.pow(1 - dist / GRASS.radius, GRASS.radialBias);
       if (Math.abs(x - TOWN.centerX) < TOWN.halfSize && Math.abs(z - TOWN.centerZ) < TOWN.halfSize) {

@@ -47,8 +47,8 @@ export const COLORS = {
   cactus: 0x5d7345,
   cactusShade: 0x46592f,
   deadWood: 0x6d573a,
-  grassRoot: 0x7e7a44,
-  grassTip: 0xc8b87a,
+  grassRoot: 0x8f8a4e, // lightened from 0x7e7a44 — the darker value read as near-black on backlit blades
+  grassTip: 0xd4c48a,
   placeholderBody: 0xb07f4e,
   placeholderSkin: 0xd8a877,
 };
@@ -288,6 +288,7 @@ export const GRASS = {
   radius: 48,
   radialBias: 0.72, // r = radius * u^bias; <1 thins with distance
   recenterDistance: 9,
+  playerKeepOut: 1.4, // grass follows the player continuously; without this it spawns on top of/right behind them and blocks the third-person view
   minScale: 0.55,
   maxScale: 1.3,
   bladesPerTuft: 4,
@@ -296,6 +297,7 @@ export const GRASS = {
   bladeLean: 0.35,
   maxSlope: 0.5,
   townDensityFactor: 0.45, // sparser on the town plateau
+  ambientFloor: 0.16, // emissive strength so backlit blades read as dark grass, not near-black spikes
 };
 
 // ----------------------------------------------------------------------- ui ---

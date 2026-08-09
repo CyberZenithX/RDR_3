@@ -270,6 +270,38 @@ group names. Highlights a later round will specifically reach for:
 
 ## Known rough edges and deliberate shortcuts
 
+- **Fixed post-round-1: grass rendered near-black and could hide the player.**
+  From a real screenshot: grass blades looked like dark spikes instead of the
+  intended olive/tan gradient, and no player character was visible in the
+  third-person view at all. Two separate causes, both fixed:
+  - Grass blades are flat single-triangle cards. A blade whose face normal
+    points away from the sun gets zero direct light, and relied on the
+    hemisphere light alone — which read as near-black in practice. Fixed with
+    `GRASS.ambientFloor` (0.16), a small constant `emissive` on the grass
+    material (see `grass.js`'s `buildGrass`) so backlit blades stay legible
+    as dark grass instead of washing to black. Also lightened
+    `COLORS.grassRoot`/`grassTip` slightly.
+  - Grass had no keep-out around the player's own (continuously-updating)
+    position, so it could spawn right on top of/immediately behind the
+    character and block the third-person camera's line of sight to it. Fixed
+    with `GRASS.playerKeepOut` (1.4 units) in `recenterGrass()`'s placement
+    loop. Verified programmatically (not visually — see below) by calling
+    `buildGrass`/`updateGrass` directly against a fake scene and checking the
+    closest placed instance is outside the keep-out radius.
+  **Still not visually confirmed** — I have no way to see the rendered canvas
+  in this environment (see next item). If grass still reads too dark or the
+  character is still hard to see, the next lever is `SUN.hemiIntensity` or
+  `GRASS.ambientFloor` itself, not a redesign.
+- **I cannot get a screenshot of this game in this environment.** The
+  Browser-preview tool's `computer{action:"screenshot"}` fails with "the
+  Browser pane is not displayed, so the page is not compositing frames" — a
+  client-side limitation of the tool/session, not something wrong with the
+  game. Every visual fix this round (and the pointer-lock fix before it) was
+  verified either by direct module-level testing (calling functions in
+  isolation and inspecting their output) or by reasoning through the math by
+  hand, informed by an actual screenshot the human shared in chat. **A later
+  round/session may have a working screenshot tool — use it if available,
+  don't assume this limitation is permanent.**
 - **Fixed post-round-1: "click to play" did nothing.** `input.js` bound the
   pointer-lock click listener to `canvas` only, but `#clickToPlay` sits on top
   of the canvas in paint order (later in the DOM) with `pointer-events: auto`
