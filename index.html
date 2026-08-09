@@ -7,22 +7,48 @@
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1410; }
   canvas { display: block; }
-  #hud {
-    position: fixed; inset: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; pointer-events: none;
+
+  .overlay {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; text-align: center; pointer-events: none;
     font: 500 15px/1.6 ui-monospace, "Cascadia Mono", Consolas, monospace;
     color: #e8d9b8; text-shadow: 0 1px 3px #000;
+    background: radial-gradient(ellipse at center, rgba(20, 14, 10, 0.35) 0%, rgba(15, 10, 7, 0.82) 100%);
+    transition: opacity 0.35s ease;
   }
-  #hud h1 { margin: 0 0 .3em; font-size: 34px; letter-spacing: .18em; color: #d9a441; }
-  #hud p { margin: .15em; opacity: .75; }
+  .overlay.hidden { opacity: 0; pointer-events: none; visibility: hidden; }
+  .overlay h1 { margin: 0 0 .3em; font-size: 34px; letter-spacing: .18em; color: #d9a441; }
+  .overlay p { margin: .15em; opacity: .8; }
+  .overlay .hint { font-size: 12.5px; opacity: .6; }
+
+  #clickToPlay { cursor: pointer; pointer-events: auto; }
+
+  #boundaryWarning {
+    position: fixed; inset: 0; pointer-events: none; opacity: 0;
+    background: radial-gradient(ellipse at center, rgba(120, 20, 10, 0) 55%, rgba(120, 20, 10, 0.55) 100%);
+    display: flex; align-items: flex-end; justify-content: center; padding-bottom: 8vh;
+  }
+  #boundaryWarning span {
+    font: 600 13px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    letter-spacing: .12em; text-transform: uppercase; color: #ffd9c2;
+    text-shadow: 0 1px 4px #000;
+  }
 </style>
 </head>
 <body>
-<div id="hud">
+
+<div id="loading" class="overlay">
   <h1>DUST &amp; IRON</h1>
-  <p>round 0 — assets staged</p>
-  <p id="status">booting…</p>
+  <p id="loadingStatus">booting…</p>
 </div>
+
+<div id="clickToPlay" class="overlay hidden">
+  <h1>DUST &amp; IRON</h1>
+  <p>click to play</p>
+  <p class="hint">WASD move &middot; Shift sprint &middot; Space jump &middot; mouse look &middot; Esc to release</p>
+</div>
+
+<div id="boundaryWarning"><span>you are leaving the territory</span></div>
 
 <script type="importmap">
 {
@@ -32,59 +58,6 @@
   }
 }
 </script>
-
-<script type="module">
-// Round 0 boot page. Proves the import map, WebGL context and render loop all
-// work before Round 1 builds the world on top of them. Round 1 replaces this
-// inline script with /src/main.js.
-import * as THREE from 'three';
-
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.setSize(innerWidth, innerHeight);
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-document.body.prepend(renderer.domElement);
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x2a1d16);
-scene.fog = new THREE.FogExp2(0x2a1d16, 0.02);
-
-const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 500);
-camera.position.set(0, 1.2, 4);
-
-scene.add(new THREE.HemisphereLight(0xd9a441, 0x2a1d16, 1.4));
-const sun = new THREE.DirectionalLight(0xffe6b8, 2.0);
-sun.position.set(3, 5, 2);
-scene.add(sun);
-
-// Placeholder marker, not a game object — Round 1 owns real scene content.
-const marker = new THREE.Mesh(
-  new THREE.TorusKnotGeometry(0.7, 0.22, 128, 24),
-  new THREE.MeshStandardMaterial({ color: 0xb06a3b, roughness: 0.55, metalness: 0.15 })
-);
-scene.add(marker);
-
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
-
-// scripts/smoke.mjs reads these to confirm the loop actually ran.
-window.__frames = 0;
-window.__ready = true;
-
-const clock = new THREE.Clock();
-renderer.setAnimationLoop(() => {
-  const t = clock.getElapsedTime();
-  marker.rotation.set(t * 0.3, t * 0.5, 0);
-  renderer.render(scene, camera);
-  window.__frames++;
-});
-
-document.getElementById('status').textContent = `three.js r${THREE.REVISION} — running`;
-</script>
+<script type="module" src="/src/main.js"></script>
 </body>
 </html>

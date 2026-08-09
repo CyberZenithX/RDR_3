@@ -1,0 +1,160 @@
+/**
+ * player.js — movement, grounding, collision, and the locomotion animation
+ * state machine. Owns the player's THREE.Vector3 position; main.js reads it
+ * for the camera and HUD.
+ *
+ * No vectors are allocated inside update() — everything reusable is a
+ * module-level/instance scratch object, per the performance budget rule.
+ */
+
+import * as THREE from 'three';
+import { PLAYER, ANIM, TOWN, BOUNDARY, SPAWN } from './config.js';
+import { isKeyDown, isPointerLocked } from './input.js';
+import { resolveCollisions } from './collision.js';
+
+function lerpAngle(a, b, t) {
+  let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
+  if (diff < -Math.PI) diff += Math.PI * 2;
+  return a + diff * t;
+}
+
+/** Speed → locomotion state with hysteresis so it doesn't chatter at the threshold. */
+function classifySpeed(speed, prevState) {
+  const half = ANIM.blendBand / 2;
+  if (prevState === 'run') {
+    if (speed < ANIM.runThreshold - half) return speed < ANIM.idleThreshold ? 'idle' : 'walk';
+    return 'run';
+  }
+  if (prevState === 'idle') {
+    return speed > ANIM.idleThreshold ? 'walk' : 'idle';
+  }
+  // prevState === 'walk'
+  if (speed > ANIM.runThreshold + half) return 'run';
+  if (speed < ANIM.idleThreshold) return 'idle';
+  return 'walk';
+}
+
+export class Player {
+  constructor(character, world) {
+    this.character = character;
+    this.world = world;
+
+    this.position = new THREE.Vector3(SPAWN.x, 0, SPAWN.z);
+    this.position.y = world.groundHeightAt(this.position.x, this.position.z);
+    this.velocityXZ = new THREE.Vector3();
+    this.velocityY = 0;
+    this.grounded = true;
+    this.speed = 0;
+    this.meshYaw = SPAWN.yaw;
+    this.animState = 'idle';
+    this.boundaryProximity = 0; // 0..1, for the UI edge-of-map fade
+
+    this._coyoteTimer = 0;
+    this._jumpBufferTimer = 0;
+    this._prevSpaceDown = false;
+
+    this._moveDir = new THREE.Vector3();
+    this._desiredVel = new THREE.Vector3();
+    this._diff = new THREE.Vector3();
+
+    character.root.position.copy(this.position);
+    character.root.rotation.y = this.meshYaw + PLAYER.meshYawOffset;
+  }
+
+  update(dt, camera) {
+    const inputActive = isPointerLocked();
+
+    // ------------------------------------------------------------- input ---
+    const ix = inputActive ? (isKeyDown('KeyD') ? 1 : 0) - (isKeyDown('KeyA') ? 1 : 0) : 0;
+    const iz = inputActive ? (isKeyDown('KeyW') ? 1 : 0) - (isKeyDown('KeyS') ? 1 : 0) : 0;
+    const sprinting = inputActive && (isKeyDown('ShiftLeft') || isKeyDown('ShiftRight'));
+    const spaceDown = inputActive && isKeyDown('Space');
+    if (spaceDown && !this._prevSpaceDown) this._jumpBufferTimer = PLAYER.jumpBuffer;
+    this._prevSpaceDown = spaceDown;
+
+    this._moveDir.set(0, 0, 0);
+    if (ix !== 0 || iz !== 0) {
+      this._moveDir
+        .addScaledVector(camera.getRight(), ix)
+        .addScaledVector(camera.getForward(), iz);
+      if (this._moveDir.lengthSq() > 0) this._moveDir.normalize();
+    }
+
+    // ------------------------------------------------------- horizontal ---
+    const targetSpeed = this._moveDir.lengthSq() > 0 ? (sprinting ? PLAYER.sprintSpeed : PLAYER.walkSpeed) : 0;
+    this._desiredVel.copy(this._moveDir).multiplyScalar(targetSpeed);
+
+    const accelerating = targetSpeed > this.velocityXZ.length();
+    const rate = (accelerating ? PLAYER.acceleration : PLAYER.deceleration) * (this.grounded ? 1 : PLAYER.airControl);
+    this._diff.copy(this._desiredVel).sub(this.velocityXZ);
+    const maxDelta = rate * dt;
+    if (this._diff.length() > maxDelta) this._diff.setLength(maxDelta);
+    this.velocityXZ.add(this._diff);
+
+    this.position.x += this.velocityXZ.x * dt;
+    this.position.z += this.velocityXZ.z * dt;
+
+    // Prop collision, then the hard world-boundary clamp (belt and suspenders
+    // on top of the boundary ridge terrain itself — see BOUNDARY in config.js).
+    resolveCollisions(this.position, PLAYER.radius);
+    const distFromCenter = Math.hypot(this.position.x - TOWN.centerX, this.position.z - TOWN.centerZ);
+    if (distFromCenter > BOUNDARY.playerLimit) {
+      const scale = BOUNDARY.playerLimit / distFromCenter;
+      this.position.x = TOWN.centerX + (this.position.x - TOWN.centerX) * scale;
+      this.position.z = TOWN.centerZ + (this.position.z - TOWN.centerZ) * scale;
+    }
+    this.boundaryProximity = THREE.MathUtils.clamp(
+      (distFromCenter - BOUNDARY.warnAt) / Math.max(1, BOUNDARY.playerLimit - BOUNDARY.warnAt),
+      0, 1,
+    );
+
+    // ------------------------------------------------------------ jump ---
+    this.velocityY += PLAYER.gravity * dt;
+    this._coyoteTimer = this.grounded ? PLAYER.coyoteTime : this._coyoteTimer - dt;
+    this._jumpBufferTimer -= dt;
+    if (this._jumpBufferTimer > 0 && this._coyoteTimer > 0) {
+      this.velocityY = PLAYER.jumpSpeed;
+      this._jumpBufferTimer = 0;
+      this._coyoteTimer = 0;
+      this.grounded = false;
+    }
+    this.position.y += this.velocityY * dt;
+
+    const groundY = this.world.groundHeightAt(this.position.x, this.position.z);
+    if (this.velocityY <= 0 && this.position.y - groundY <= PLAYER.groundSnap) {
+      this.position.y = groundY;
+      this.velocityY = 0;
+      this.grounded = true;
+    } else {
+      this.grounded = false;
+    }
+
+    if (this.position.y < PLAYER.respawnBelowY) this.respawn();
+
+    // -------------------------------------------------------- facing ---
+    this.speed = this.velocityXZ.length();
+    if (this._moveDir.lengthSq() > 0.0001) {
+      const targetYaw = Math.atan2(-this._moveDir.x, -this._moveDir.z) + PLAYER.meshYawOffset;
+      this.meshYaw = lerpAngle(this.meshYaw, targetYaw, Math.min(1, PLAYER.turnRate * dt));
+    }
+
+    // ---------------------------------------------------------- anim ---
+    this.animState = classifySpeed(this.speed, this.animState);
+    const animSpeed = this.grounded ? this.speed : this.speed * ANIM.airTimeScale;
+    this.character.setLocomotion(this.animState, animSpeed);
+    this.character.update(dt);
+
+    // ------------------------------------------------------- transform ---
+    this.character.root.position.copy(this.position);
+    this.character.root.rotation.y = this.meshYaw;
+  }
+
+  respawn() {
+    this.position.set(SPAWN.x, 0, SPAWN.z);
+    this.position.y = this.world.groundHeightAt(this.position.x, this.position.z);
+    this.velocityXZ.set(0, 0, 0);
+    this.velocityY = 0;
+    this.grounded = true;
+    this.meshYaw = SPAWN.yaw;
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dust-and-iron",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", ".", "-l", "5311"],
+      "port": 5311
+    }
+  ]
+}

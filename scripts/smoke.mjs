@@ -63,9 +63,12 @@ page.on('response', (r) => {
 console.log(`smoke: loading http://localhost:${PORT}/`);
 await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'load', timeout: 30000 });
 
-// The render loop must actually start and keep going.
+// The render loop must actually start and keep going. Timeout is generous
+// (45s) because headless chromium's software rasterizer renders a 2048
+// PCFSoftShadowMap far slower than any real GPU does — measured ~3fps here
+// vs. 60fps target on real hardware. See CLAUDE.md "known rough edges".
 try {
-  await page.waitForFunction((n) => window.__frames > n, FRAME_TARGET, { timeout: 20000 });
+  await page.waitForFunction((n) => window.__frames > n, FRAME_TARGET, { timeout: 45000 });
 } catch {
   problems.push(`render loop never reached ${FRAME_TARGET} frames`);
 }
@@ -79,6 +82,32 @@ const CHECKS = [
     await page.waitForTimeout(500);
     const b = await page.evaluate(() => window.__frames);
     return b > a ? null : `frame counter stalled at ${a}`;
+  }],
+
+  // Round 1 ----------------------------------------------------------------
+  ['player.glb loaded (not the capsule placeholder)', async () => {
+    const loaded = await page.evaluate(() => window.__debug?.modelsLoaded?.player);
+    return loaded === true ? null : `modelsLoaded.player was ${JSON.stringify(loaded)}`;
+  }],
+  ['player y settles onto the terrain (not falling forever)', async () => {
+    const y0 = await page.evaluate(() => window.__debug?.playerY);
+    await page.waitForTimeout(800);
+    const y1 = await page.evaluate(() => window.__debug?.playerY);
+    if (typeof y0 !== 'number' || typeof y1 !== 'number' || !Number.isFinite(y1)) {
+      return `playerY not numeric (${y0} -> ${y1})`;
+    }
+    if (y1 < -50) return `playerY is ${y1} — looks like it's still falling`;
+    return Math.abs(y1 - y0) < 0.5 ? null : `playerY still moving fast at rest: ${y0} -> ${y1}`;
+  }],
+  ['player is grounded', async () => {
+    const grounded = await page.evaluate(() => window.__debug?.grounded);
+    return grounded === true ? null : `grounded was ${JSON.stringify(grounded)}`;
+  }],
+  ['props scattered across the terrain', async () => {
+    const counts = await page.evaluate(() => window.__debug?.propCounts);
+    if (!counts) return 'propCounts missing';
+    const bad = Object.entries(counts).filter(([, n]) => !(n > 0));
+    return bad.length === 0 ? null : `zero-count prop kinds: ${bad.map(([k]) => k).join(', ')}`;
   }],
 ];
 
