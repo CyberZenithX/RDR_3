@@ -7,7 +7,7 @@
  */
 
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeRng } from './noise.js';
 import { heightAt, normalAt } from './terrain.js';
 import { addCircleCollider } from './collision.js';
@@ -40,7 +40,19 @@ function pickSpot() {
 // ---------------------------------------------------------------- geometry ---
 
 function makeRockGeometry(detail, lumpiness) {
-  const geo = new THREE.IcosahedronGeometry(1, detail);
+  // IcosahedronGeometry (like all three.js Platonic-solid geometries) is
+  // non-indexed: a vertex shared by several triangles is stored as separate
+  // duplicate entries, one per triangle. Displacing each buffer entry with
+  // an independent random offset (as this function does, per vertex) then
+  // moves what should be the same shared corner to different places for
+  // each triangle that touches it — tearing the mesh apart into a shattered,
+  // faceted mess at every seam instead of a lumpy but continuous rock.
+  // mergeVertices() collapses coincident positions into one indexed vertex
+  // first, so the displacement below moves each real corner exactly once,
+  // consistently for every triangle that shares it.
+  const raw = new THREE.IcosahedronGeometry(1, detail);
+  const geo = mergeVertices(raw);
+  raw.dispose();
   const pos = geo.attributes.position;
   const v = new THREE.Vector3();
   for (let i = 0; i < pos.count; i++) {

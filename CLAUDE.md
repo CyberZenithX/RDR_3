@@ -351,10 +351,23 @@ group names. Highlights a later round will specifically reach for:
   and mesh-facing bugs below were actually *seen*, not just reasoned about.
   Write throwaway scripts for this (`scripts/_shot-something.mjs`), delete
   them when done — don't leave one-off screenshot scripts committed. For
-  camera control during a screenshot, `main.js` exposes
-  `window.__debug.tpCamera` (the live `ThirdPersonCamera` instance) — set
-  `.yaw`/`.pitch`/`.currentDistance` directly via `page.evaluate()` to frame
-  whatever you need to check, bypassing mouse-look entirely.
+  camera control during a screenshot, `main.js` exposes three debug hooks on
+  `window.__debug`, all live object references, not snapshots:
+  `tpCamera` (set `.yaw`/`.pitch`/`.currentDistance` directly, bypassing
+  mouse-look — but note `.snap(pos)` **recalculates `.currentDistance` itself**
+  via occlusion checks and will clobber a value you just set, so set position
+  fields, don't rely on `snap()` preserving a chosen distance), `player`
+  (`.position` is a live `Vector3` you can teleport by mutating in place),
+  and `scene` (traverse it to find object world positions — e.g. an
+  `InstancedMesh`'s per-instance matrix via `getMatrixAt(i, m)` — when you
+  need to frame something specific rather than whatever's near spawn). Also:
+  the camera direction math is `dirX=sin(yaw)cosPitch, dirY=sin(pitch),
+  dirZ=cos(yaw)cosPitch` for the **camera's position offset from the pivot**,
+  and the camera **views in the opposite direction**, `-(dirX,dirY,dirZ)` —
+  to aim at a target, compute `viewDir = normalize(target - eye)` then
+  `pitch = asin(-viewDir.y)`, `yaw = atan2(-viewDir.x, -viewDir.z)`. Got this
+  backwards twice this session before landing on it — write it down instead
+  of re-deriving it next time.
 - **Fixed: the sky's sun rendered as a jagged, non-circular blob instead of a
   clean disc.** Confirmed visually (see above — this is the first round a
   screenshot pipeline actually existed) by pointing the debug camera straight
@@ -399,6 +412,36 @@ group names. Highlights a later round will specifically reach for:
   applied zero or two times depending on movement state). Confirmed via
   screenshot: the character now shows its back at the default spawn camera
   position, front at 180° around, matching third-person convention.
+- **Fixed: rocks rendered as shattered/exploded fragments instead of lumpy
+  solids.** Confirmed from a real screenshot — rocks looked like a jumbled
+  pile of disconnected, floating triangle shards, not the intended "lumpy
+  `IcosahedronGeometry`" look. Root cause in `props.js`'s
+  `makeRockGeometry()`: `IcosahedronGeometry` (like all three.js
+  Platonic-solid geometries) is **non-indexed** — a corner shared by several
+  triangles is stored as separate duplicate position entries, one per
+  triangle. The lump-displacement loop called `rng()` independently **per
+  buffer entry**, so duplicate copies of what should be the same shared
+  corner got different random offsets and moved to different places —
+  tearing the mesh apart at every triangle seam. Reproduced and fixed in
+  isolation (a standalone script with the exact same seed and params, `props.js`
+  untouched, just a `FIXED` flag toggling one `mergeVertices()` call): the
+  "before" render is unambiguously shattered — floating shards, a visible
+  gap/hole where the tear left a backface exposed; "after" is one solid,
+  continuous, properly-shaded lumpy rock. **Fix**: `mergeVertices()`
+  (`three/addons/utils/BufferGeometryUtils.js`, already imported in this file
+  for `mergeGeometries`) collapses coincident positions into one indexed
+  vertex *before* the displacement loop runs, so every real corner moves
+  exactly once, consistently, for every triangle that shares it. **Cacti and
+  dead trees were never at risk of this** — they're rigid `CylinderGeometry`
+  pieces glued together with `mergeGeometries`, no per-vertex random
+  displacement, so there's nothing that can diverge between duplicate
+  corners. Not added to `smoke.mjs` — this is a shape/topology defect, not
+  something a scalar debug field can catch; the isolated repro script is the
+  regression test, but it was a throwaway (deleted after use), not committed.
+  **If a future round adds another randomly-displaced non-indexed geometry
+  (Platonic solids: Icosahedron/Octahedron/Tetrahedron/Dodecahedron all
+  default to non-indexed), reach for `mergeVertices()` before displacing, not
+  after.**
 - **Fixed post-round-1: "click to play" did nothing.** `input.js` bound the
   pointer-lock click listener to `canvas` only, but `#clickToPlay` sits on top
   of the canvas in paint order (later in the DOM) with `pointer-events: auto`

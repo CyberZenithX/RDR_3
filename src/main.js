@@ -37,6 +37,7 @@ async function init() {
   ui.setLoadingText('building world…');
   const world = buildWorld(scene);
   window.__debug.propCounts = world.propCounts;
+  window.__debug.scene = scene; // debug hook, not read by gameplay code
 
   ui.setLoadingText('loading player…');
   const character = await createPlayerCharacter();
@@ -51,6 +52,7 @@ async function init() {
   tpCamera.yaw = SPAWN.yaw;
   tpCamera.snap(player.position);
   window.__debug.tpCamera = tpCamera; // debug hook, not read by gameplay code
+  window.__debug.player = player; // debug hook, not read by gameplay code
 
   initInput(renderer.domElement);
   onPointerLockChanged((locked) => ui.setPointerLocked(locked));
