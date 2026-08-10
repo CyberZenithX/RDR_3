@@ -50,7 +50,24 @@ function makeRockGeometry(detail, lumpiness) {
   // mergeVertices() collapses coincident positions into one indexed vertex
   // first, so the displacement below moves each real corner exactly once,
   // consistently for every triangle that shares it.
+  //
+  // mergeVertices() compares ALL attributes together, not just position —
+  // and IcosahedronGeometry has a UV seam where position-identical vertices
+  // carry different UV coordinates (needed for texture-coordinate wrapping).
+  // Left in place, that seam's vertices never merge, leaving a handful of
+  // degree-2 vertices (a proper closed-mesh vertex needs degree >=3) that
+  // reliably fold into a visible notch/crack at that same structural seam
+  // on every rock, regardless of seed or lumpiness — confirmed by measuring
+  // vertex degree directly (12 defective degree-2 vertices, 57 total instead
+  // of the correct 42) and by rendering the same 6 seeds across 4 lumpiness
+  // levels: the notch appeared in every single one, including at very low
+  // lumpiness, which is what pointed at a structural cause rather than
+  // random bad luck. This material has no texture map, so the UV attribute
+  // is dead weight anyway — deleting it before merging lets the seam
+  // actually collapse (verified: 42 vertices, clean degree-5/6 distribution,
+  // no more low-degree vertices).
   const raw = new THREE.IcosahedronGeometry(1, detail);
+  raw.deleteAttribute('uv');
   const geo = mergeVertices(raw);
   raw.dispose();
   const pos = geo.attributes.position;

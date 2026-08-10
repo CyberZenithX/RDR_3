@@ -413,35 +413,55 @@ group names. Highlights a later round will specifically reach for:
   screenshot: the character now shows its back at the default spawn camera
   position, front at 180° around, matching third-person convention.
 - **Fixed: rocks rendered as shattered/exploded fragments instead of lumpy
-  solids.** Confirmed from a real screenshot — rocks looked like a jumbled
-  pile of disconnected, floating triangle shards, not the intended "lumpy
-  `IcosahedronGeometry`" look. Root cause in `props.js`'s
-  `makeRockGeometry()`: `IcosahedronGeometry` (like all three.js
-  Platonic-solid geometries) is **non-indexed** — a corner shared by several
-  triangles is stored as separate duplicate position entries, one per
-  triangle. The lump-displacement loop called `rng()` independently **per
-  buffer entry**, so duplicate copies of what should be the same shared
-  corner got different random offsets and moved to different places —
-  tearing the mesh apart at every triangle seam. Reproduced and fixed in
-  isolation (a standalone script with the exact same seed and params, `props.js`
-  untouched, just a `FIXED` flag toggling one `mergeVertices()` call): the
-  "before" render is unambiguously shattered — floating shards, a visible
-  gap/hole where the tear left a backface exposed; "after" is one solid,
-  continuous, properly-shaded lumpy rock. **Fix**: `mergeVertices()`
-  (`three/addons/utils/BufferGeometryUtils.js`, already imported in this file
-  for `mergeGeometries`) collapses coincident positions into one indexed
-  vertex *before* the displacement loop runs, so every real corner moves
-  exactly once, consistently, for every triangle that shares it. **Cacti and
-  dead trees were never at risk of this** — they're rigid `CylinderGeometry`
-  pieces glued together with `mergeGeometries`, no per-vertex random
-  displacement, so there's nothing that can diverge between duplicate
-  corners. Not added to `smoke.mjs` — this is a shape/topology defect, not
-  something a scalar debug field can catch; the isolated repro script is the
-  regression test, but it was a throwaway (deleted after use), not committed.
-  **If a future round adds another randomly-displaced non-indexed geometry
-  (Platonic solids: Icosahedron/Octahedron/Tetrahedron/Dodecahedron all
-  default to non-indexed), reach for `mergeVertices()` before displacing, not
-  after.**
+  solids — two separate bugs, found in two passes.** Confirmed from a real
+  screenshot — rocks looked like a jumbled pile of disconnected, floating
+  triangle shards, not the intended "lumpy `IcosahedronGeometry`" look.
+  - **Bug 1 (the dramatic one).** `IcosahedronGeometry` (like all three.js
+    Platonic-solid geometries) is **non-indexed** — a corner shared by
+    several triangles is stored as separate duplicate position entries, one
+    per triangle. The lump-displacement loop in `makeRockGeometry()` called
+    `rng()` independently **per buffer entry**, so duplicate copies of what
+    should be the same shared corner got different random offsets and moved
+    apart — tearing the mesh open at every seam. Fixed with `mergeVertices()`
+    before the displacement loop, collapsing coincident positions into one
+    indexed vertex so every real corner moves exactly once.
+  - **Bug 2 (the subtle one, found because the human looked again after the
+    first fix and said "some rocks are still weird").** After bug 1's fix,
+    most rocks looked right, but *every single rock* still had one small,
+    consistently-placed dark notch — same rough location regardless of seed
+    or lumpiness, which is the tell that this isn't random bad luck, it's
+    structural. Measured directly: `mergeVertices()` compares **all**
+    attributes together, not just position, and `IcosahedronGeometry` has a
+    UV seam where position-identical vertices carry *different* UV
+    coordinates (needed for texture-coordinate wrapping around the sphere).
+    Because the UVs differ, those seam vertices never merge — confirmed by
+    counting: 57 vertices where the correct count is 42, with 12 defective
+    **degree-2** vertices (a proper closed-mesh vertex needs degree ≥3). One
+    of those low-degree seam vertices is always the topmost point, and
+    displacing a degree-2 vertex reliably folds into a visible notch no
+    matter what random value it gets — which is why turning lumpiness down
+    didn't help (tested 4 lumpiness levels × 6 seeds; the notch was in all
+    24). This material has no texture map (`rockMat` is a flat color, no
+    `map`), so the UV attribute is dead weight — `raw.deleteAttribute('uv')`
+    before `mergeVertices()` lets the seam actually collapse. Re-verified:
+    42 vertices, clean degree-5/6 distribution only, and the same
+    3-lumpiness × 6-seed grid (18 rocks) came back completely clean, no
+    notches anywhere.
+  Both bugs reproduced and fixed in isolation (standalone scripts with the
+  exact same seed/params as the real config, `props.js` untouched during
+  testing) before being applied to the real file — screenshots sent to the
+  human as proof at each stage. **Cacti and dead trees were never at risk of
+  either bug** — they're rigid `CylinderGeometry` pieces glued together with
+  `mergeGeometries`, no per-vertex random displacement and no meaningful UV
+  seam duplication for this use. Not added to `smoke.mjs` — these are
+  shape/topology defects, not something a scalar debug field can catch; the
+  isolated repro scripts were the regression tests, all thrown away after
+  use, not committed. **If a future round adds another randomly-displaced
+  non-indexed geometry** (Platonic solids: Icosahedron/Octahedron/
+  Tetrahedron/Dodecahedron all default to non-indexed): `mergeVertices()`
+  before displacing, not after — **and if the material has no texture map,
+  delete the `uv` attribute first**, or the UV seam will silently defeat the
+  merge and leave the exact same structural notch.
 - **Fixed post-round-1: "click to play" did nothing.** `input.js` bound the
   pointer-lock click listener to `canvas` only, but `#clickToPlay` sits on top
   of the canvas in paint order (later in the DOM) with `pointer-events: auto`
