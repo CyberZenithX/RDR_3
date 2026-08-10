@@ -133,7 +133,12 @@ function makeDeadTreeGeometry(cfg) {
 /**
  * Places `count` instances of a prop kind, round-robined across `geometries`
  * (one InstancedMesh per geometry variant), registers a collider per
- * placement, and adds every mesh to `scene`.
+ * placement, and adds every mesh to `scene`. `colliderRadius` is either one
+ * factor shared by every variant (cactus/tree — rigid, near-identical
+ * footprint regardless of variant) or an array with one factor per
+ * geometry variant, indexed the same way as `geometries` (rocks — lumpy
+ * variants have measurably different worst-case visual radii, so one shared
+ * factor either undersizes the spikiest variant or oversizes the mildest).
  */
 function scatterInstanced(scene, { geometries, material, count, minScale, maxScale, sink, colliderRadius }) {
   const perVariant = geometries.map(() => []);
@@ -142,11 +147,13 @@ function scatterInstanced(scene, { geometries, material, count, minScale, maxSca
     const spot = pickSpot();
     if (!spot) continue;
     const scale = minScale + rng() * (maxScale - minScale);
-    perVariant[i % geometries.length].push({
+    const variant = i % geometries.length;
+    perVariant[variant].push({
       x: spot.x, z: spot.z, y: heightAt(spot.x, spot.z) - sink * scale,
       rotY: rng() * Math.PI * 2, scale,
     });
-    addCircleCollider(spot.x, spot.z, colliderRadius * scale);
+    const factor = Array.isArray(colliderRadius) ? colliderRadius[variant] : colliderRadius;
+    addCircleCollider(spot.x, spot.z, factor * scale);
     placed++;
   }
 
@@ -197,7 +204,7 @@ export function buildProps(scene) {
   const rocks = scatterInstanced(scene, {
     geometries: rockGeos, material: rockMat, count: PROPS.rock.count,
     minScale: PROPS.rock.minScale, maxScale: PROPS.rock.maxScale,
-    sink: PROPS.rock.sinkFactor, colliderRadius: PROPS.rock.colliderFactor,
+    sink: PROPS.rock.sinkFactor, colliderRadius: PROPS.rock.colliderFactors,
   });
   const cacti = scatterInstanced(scene, {
     geometries: cactusGeos, material: cactusMat, count: PROPS.cactus.count,

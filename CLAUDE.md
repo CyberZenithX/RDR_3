@@ -462,6 +462,38 @@ group names. Highlights a later round will specifically reach for:
   before displacing, not after — **and if the material has no texture map,
   delete the `uv` attribute first**, or the UV seam will silently defeat the
   merge and leave the exact same structural notch.
+- **Fixed: player could walk visibly into large rocks.** A third rock bug,
+  found by the human after the two shape fixes above — "I can still walk
+  into rocks," with a screenshot showing the character overlapping a big
+  rock's visible surface. This one was a pure tuning mismatch, not a shape
+  bug: `PROPS.rock.colliderFactor` was a single value, `0.8`, smaller than
+  even the rock's *unbumped* base radius (`IcosahedronGeometry(1, detail)`
+  has radius exactly `1.0`), before any lumpiness bulging outward is
+  considered. Measured directly (max XZ vertex radius across 40 generated
+  samples per lumpiness variant, matching `props.js`'s `rockGeos` order —
+  base/×0.7/×1.3): **1.34 / 1.24 / 1.44** — the old `0.8` collider was
+  undersized by up to `0.64 × scale`, which for a large rock (`maxScale`
+  3.2) is over 2 world units of walkable visual overlap, more than the
+  player's own diameter. **Fix**: replaced the single `colliderFactor` with
+  `colliderFactors`, an array with one value per geometry variant (`[1.38,
+  1.28, 1.48]` — the measured maximums plus a small safety margin), and
+  `scatterInstanced()` in `props.js` now indexes into it the same way it
+  indexes `geometries` (`i % geometries.length`), instead of applying one
+  shared factor to every variant regardless of its actual lumpiness. Kept
+  backward compatible: `colliderRadius` in `scatterInstanced` still accepts
+  a plain scalar too (cactus/tree pass one, since they're rigid
+  `CylinderGeometry` shapes with near-identical footprint regardless of
+  variant — no mismatch to fix there). Verified two ways: (1) a script that
+  calls `resolveCollisions` in a loop exactly like `player.js`'s real
+  per-frame flow, walking a simulated player toward a real placed rock
+  instance — confirmed it stops at exactly `colliderRadius + playerRadius`
+  from the rock's center, and that the resolved collider radius divided by
+  the rock's instance scale equals the expected per-variant factor (1.38 for
+  that instance); (2) a screenshot from that stopped position showing clean
+  separation, no overlap. Added a `smoke.mjs` check (`colliderFactors` must
+  all be ≥1.2) as a cheap regression floor — it doesn't reproduce the full
+  geometry measurement, but it catches "someone changed this back to a
+  single undersized number" cheaply.
 - **Fixed post-round-1: "click to play" did nothing.** `input.js` bound the
   pointer-lock click listener to `canvas` only, but `#clickToPlay` sits on top
   of the canvas in paint order (later in the DOM) with `pointer-events: auto`

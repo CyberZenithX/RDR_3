@@ -149,6 +149,21 @@ const CHECKS = [
     const diff = Math.abs(((info.rotationY - info.expected + Math.PI) % (Math.PI * 2)) - Math.PI);
     return diff < 0.01 ? null : `rotation.y is ${info.rotationY}, expected ${info.expected} (meshYawOffset not applied)`;
   }],
+  ['rock collider factors comfortably cover the visual geometry', async () => {
+    // Regression guard for a real bug: PROPS.rock.colliderFactor was 0.8,
+    // smaller than even the *unbumped* base rock radius (IcosahedronGeometry
+    // radius 1.0), before any lumpiness bulging outward is considered — the
+    // player could walk visibly into large rocks. Measured directly (max XZ
+    // vertex radius across 40 generated samples per variant): 1.34 / 1.24 /
+    // 1.44. This doesn't reproduce that full measurement (would need
+    // mergeVertices in this context), but it catches the class of regression
+    // cheaply: every configured factor must clear a safe floor above the
+    // known-unbumped base radius of 1.0.
+    const factors = await page.evaluate(async () => (await import('/src/config.js')).PROPS.rock.colliderFactors);
+    if (!Array.isArray(factors) || factors.length === 0) return `colliderFactors missing or not an array (${JSON.stringify(factors)})`;
+    const tooSmall = factors.filter((f) => f < 1.2);
+    return tooSmall.length === 0 ? null : `colliderFactors ${JSON.stringify(factors)} has values below the 1.2 safety floor`;
+  }],
 ];
 
 for (const [label, fn] of CHECKS) {

@@ -250,7 +250,16 @@ export const PROPS = {
     detail: 1,
     lumpiness: 0.34,
     sinkFactor: 0.28, // fraction of the radius buried in the ground
-    colliderFactor: 0.8,
+    // One collider factor per geometry variant in props.js's rockGeos array
+    // (base lumpiness, x0.7, x1.3, in that order) -- NOT a single shared
+    // value like cactus/tree use below. Rocks are lumpy, so their visual XZ
+    // radius varies per variant; a single undersized factor (0.8, the old
+    // value) let the player walk visibly into large rocks since it was
+    // smaller than even the *unbumped* base geometry radius (1.0), let alone
+    // a lump bulging outward. Measured directly (max XZ vertex radius across
+    // 40 generated samples per variant): 1.34 / 1.24 / 1.44. These values add
+    // a small safety margin above that.
+    colliderFactors: [1.38, 1.28, 1.48],
   },
   cactus: {
     count: 150,
