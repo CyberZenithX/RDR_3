@@ -50,6 +50,7 @@ async function init() {
   const tpCamera = new ThirdPersonCamera(camera);
   tpCamera.yaw = SPAWN.yaw;
   tpCamera.snap(player.position);
+  window.__debug.tpCamera = tpCamera; // debug hook, not read by gameplay code
 
   initInput(renderer.domElement);
   onPointerLockChanged((locked) => ui.setPointerLocked(locked));
@@ -76,6 +77,7 @@ async function init() {
     window.__debug.cameraDistanceToPlayer = camera.position.distanceTo(player.position);
     window.__debug.cameraCurrentDistance = tpCamera.currentDistance;
     window.__debug.cameraFov = camera.fov;
+    window.__debug.characterRotationY = character.root.rotation.y;
   });
 }
 

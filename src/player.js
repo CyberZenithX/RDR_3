@@ -132,9 +132,13 @@ export class Player {
     if (this.position.y < PLAYER.respawnBelowY) this.respawn();
 
     // -------------------------------------------------------- facing ---
+    // meshYaw is always the pure logical facing angle (matches movement
+    // direction, no offset baked in) — PLAYER.meshYawOffset is applied
+    // exactly once, below, when it's turned into a render rotation. Baking
+    // it in here too would double it up the moment the player moves.
     this.speed = this.velocityXZ.length();
     if (this._moveDir.lengthSq() > 0.0001) {
-      const targetYaw = Math.atan2(-this._moveDir.x, -this._moveDir.z) + PLAYER.meshYawOffset;
+      const targetYaw = Math.atan2(-this._moveDir.x, -this._moveDir.z);
       this.meshYaw = lerpAngle(this.meshYaw, targetYaw, Math.min(1, PLAYER.turnRate * dt));
     }
 
@@ -146,7 +150,7 @@ export class Player {
 
     // ------------------------------------------------------- transform ---
     this.character.root.position.copy(this.position);
-    this.character.root.rotation.y = this.meshYaw;
+    this.character.root.rotation.y = this.meshYaw + PLAYER.meshYawOffset;
   }
 
   respawn() {

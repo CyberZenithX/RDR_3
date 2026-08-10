@@ -340,16 +340,65 @@ group names. Highlights a later round will specifically reach for:
   fix above — the human should check both on the next look, since a correctly
   sized character standing in grass is a genuinely different scene than what
   either screenshot showed.
-- **I cannot get a screenshot of this game in this environment.** The
-  Browser-preview tool's `computer{action:"screenshot"}` fails with "the
-  Browser pane is not displayed, so the page is not compositing frames" — a
-  client-side limitation of the tool/session, not something wrong with the
-  game. Every visual fix this round (and the pointer-lock fix before it) was
-  verified either by direct module-level testing (calling functions in
-  isolation and inspecting their output) or by reasoning through the math by
-  hand, informed by an actual screenshot the human shared in chat. **A later
-  round/session may have a working screenshot tool — use it if available,
-  don't assume this limitation is permanent.**
+- **Correction to an earlier note in this file: screenshots ARE possible, just
+  not through the Browser-preview tool.** The Browser-preview MCP pane's
+  `computer{action:"screenshot"}` still fails with "the Browser pane is not
+  displayed, so the page is not compositing frames" in this environment — but
+  a **plain Playwright script** (same pattern as `scripts/smoke.mjs`: launch
+  chromium headless, serve the folder over `node:http`, `page.goto`, wait for
+  `window.__ready`) works fine and `page.screenshot({path: ...})` produces a
+  real PNG you can then open with the Read tool. This is how the sun-shader
+  and mesh-facing bugs below were actually *seen*, not just reasoned about.
+  Write throwaway scripts for this (`scripts/_shot-something.mjs`), delete
+  them when done — don't leave one-off screenshot scripts committed. For
+  camera control during a screenshot, `main.js` exposes
+  `window.__debug.tpCamera` (the live `ThirdPersonCamera` instance) — set
+  `.yaw`/`.pitch`/`.currentDistance` directly via `page.evaluate()` to frame
+  whatever you need to check, bypassing mouse-look entirely.
+- **Fixed: the sky's sun rendered as a jagged, non-circular blob instead of a
+  clean disc.** Confirmed visually (see above — this is the first round a
+  screenshot pipeline actually existed) by pointing the debug camera straight
+  at the sun direction: before the fix the disc had a pointed, star-like,
+  asymmetric edge; after, a clean circle with a soft halo. Root cause in
+  `sky.js`'s fragment shader: `vWorldDir` is a per-vertex unit vector,
+  interpolated *linearly* across each triangle by the rasterizer before the
+  fragment shader ever sees it — linear interpolation of unit vectors does
+  not preserve unit length, so the interpolated value shrinks away from 1.0
+  toward the middle of large triangles. The sky dome is coarse (32×20
+  segments), so this shrinkage is real, and `sunDiscPower` (340) amplifies
+  even a tiny dot-product error enormously (`pow(x, 340)` is extremely
+  sensitive near `x=1`). Measured directly with a small standalone vector-math
+  script: at the midpoint of a typical triangle edge nearest the sun, the
+  un-normalized dot product gave a sun-term of `0.122` vs. the correct
+  `0.350` — a 3x error, and the error is non-monotonic across the dome's
+  triangulation, which is exactly what produces a blotchy/pointed shape
+  instead of a smooth circular falloff. **Fix**: `normalize(vWorldDir)` once
+  at the top of the fragment shader (`src/sky.js`), used for both the sun
+  terms and the horizon/haze gradient (`h = dir.y`). The gradient terms use
+  much lower powers (2.6, 3.4) so they were far less visibly affected, but
+  there was no reason to leave them on the same unnormalized quantity.
+- **Fixed: a second, older mesh-facing bug, independent of the model swap.**
+  After swapping to Farmer, the character still faced the camera even with
+  `PLAYER.meshYawOffset` correctly set to `Math.PI`. Root cause was in
+  `player.js`, present since round 1: the constructor correctly set
+  `character.root.rotation.y = this.meshYaw + PLAYER.meshYawOffset`, but the
+  **per-frame update()** at the bottom of the file set
+  `character.root.rotation.y = this.meshYaw` — no offset — and since
+  `update()` runs from frame 1 onward, it overwrote the constructor's correct
+  value almost immediately. The offset only ever "worked" because the
+  movement-turning code (`targetYaw = atan2(...) + PLAYER.meshYawOffset`)
+  baked the offset *into* `meshYaw` itself the first time the player moved —
+  so the bug was invisible during normal play (you're always in motion by
+  the time you look) but very visible at spawn or right after any respawn
+  (`meshYaw` resets to the un-offset `SPAWN.yaw` there too). **Fix**: made
+  `meshYaw` consistently a *pure logical facing angle* with no offset baked
+  in anywhere (removed the offset from the `targetYaw` calculation), and
+  apply `PLAYER.meshYawOffset` using one consistent formula everywhere (both the
+  constructor and the per-frame transform use the identical
+  `this.meshYaw + PLAYER.meshYawOffset` formula now, so it can never be
+  applied zero or two times depending on movement state). Confirmed via
+  screenshot: the character now shows its back at the default spawn camera
+  position, front at 180° around, matching third-person convention.
 - **Fixed post-round-1: "click to play" did nothing.** `input.js` bound the
   pointer-lock click listener to `canvas` only, but `#clickToPlay` sits on top
   of the canvas in paint order (later in the DOM) with `pointer-events: auto`

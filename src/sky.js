@@ -30,14 +30,22 @@ const skyFragmentShader = /* glsl */ `
   varying vec3 vWorldDir;
 
   void main() {
-    float h = clamp(vWorldDir.y, -1.0, 1.0);
+    // vWorldDir is a per-vertex unit vector, but linear interpolation across
+    // a triangle does not preserve unit length — it shrinks toward the
+    // middle of large triangles. On this dome's coarse 32x20 segments that
+    // shrinkage is small, but sunDiscPower (340) amplifies even a tiny dot
+    // product error enormously, turning what should be a clean round disc
+    // into a blotchy, faceted, non-circular blob. Re-normalize before using it.
+    vec3 dir = normalize(vWorldDir);
+
+    float h = clamp(dir.y, -1.0, 1.0);
     float up = pow(clamp(h, 0.0, 1.0), horizonPower);
     vec3 col = mix(horizonColor, zenithColor, up);
 
     float low = pow(1.0 - clamp(h, 0.0, 1.0), lowHazePower);
     col = mix(col, lowHazeColor, low * step(h, 0.35));
 
-    float sunAmount = max(dot(vWorldDir, sunDirection), 0.0);
+    float sunAmount = max(dot(dir, sunDirection), 0.0);
     col += sunColor * pow(sunAmount, sunDiscPower) * sunDiscStrength;
     col += sunColor * pow(sunAmount, sunHaloPower) * sunHaloStrength;
 

@@ -128,6 +128,27 @@ const CHECKS = [
     if (bboxHeight < 1.2 || bboxHeight > 2.5) return `characterWorldBBoxHeight is ${bboxHeight}m — not human-sized`;
     return null;
   }],
+  ['player mesh yaw offset actually applied at spawn', async () => {
+    // Regression guard for a real bug: player.js's constructor correctly set
+    // rotation.y = meshYaw + PLAYER.meshYawOffset, but the per-frame update()
+    // set rotation.y = meshYaw with NO offset — and since update() runs from
+    // frame 1, it silently overwrote the constructor's correct value before
+    // the game was ever visible. The offset only "worked" once the player
+    // had moved at least once (the movement-turning code baked it into
+    // meshYaw itself). Invisible during normal play, very visible at spawn.
+    // This check would have caught it: at rest, rotation.y should equal
+    // SPAWN.yaw + PLAYER.meshYawOffset, not just SPAWN.yaw.
+    const info = await page.evaluate(async () => {
+      const cfg = await import('/src/config.js');
+      return {
+        rotationY: window.__debug?.characterRotationY,
+        expected: cfg.SPAWN.yaw + cfg.PLAYER.meshYawOffset,
+      };
+    });
+    if (typeof info.rotationY !== 'number') return `characterRotationY missing (${info.rotationY})`;
+    const diff = Math.abs(((info.rotationY - info.expected + Math.PI) % (Math.PI * 2)) - Math.PI);
+    return diff < 0.01 ? null : `rotation.y is ${info.rotationY}, expected ${info.expected} (meshYawOffset not applied)`;
+  }],
 ];
 
 for (const [label, fn] of CHECKS) {
