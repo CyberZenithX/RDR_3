@@ -61,17 +61,41 @@ One line per file. Read only what the round needs.
 
 ## Models — inventory
 
-Unchanged since round 0. All three are **Quaternius, CC0 1.0**, pulled from poly.pizza.
+All three are **Quaternius, CC0 1.0**, pulled from poly.pizza.
 
 | File | Source model | Origin | KB | Meshes | Skins |
 |---|---|---|---|---|---|
-| `models/player.glb` | "Worker" (Ultimate Modular Men Pack) | `poly.pizza/m/Yg2bQZO6Hj` | 1313 | 4 | 4 |
+| `models/player.glb` | "Farmer" (Ultimate Modular Men Pack) | `poly.pizza/m/7pn3R6hPvE` | 1338 | 4 | 4 |
 | `models/bandit.glb` | "Punk" (Ultimate Modular Men Pack) | `poly.pizza/m/BTALZymknF` | 1342 | 4 | 4 |
 | `models/horse.glb` | "Horse" (Animated Animal Pack) | `poly.pizza/m/qvTrSG9pZF` | 1082 | 1 | 1 |
 
-**Measured this round (world-space bounding box via `gltf-transform`'s `getBounds`, i.e. the actual size three.js will load, not the raw local-vertex numbers round 0's table showed):**
+**`player.glb` swapped post-round-1 from "Worker" to "Farmer"** — the human
+asked for something more appropriate for a western/horse game than a
+hardhat-and-hi-vis construction worker. Verified before swapping: same
+Quaternius "Ultimate Modular Men Pack" family, **identical 85-node skeleton**
+(`Wrist.R`/`Hips`/`Chest` all present, same names) and **identical 24-clip
+`CharacterArmature|`-prefixed animation set** as the old `player.glb` — this
+was a same-rig reskin, not a new asset integration, so nothing downstream
+(`findClip`, bone-name lookups, round 3's hand-bone gun attachment) needed to
+change. Mesh names differ slightly (`Farmer_Feet/Pants/Body/Head` vs
+`Worker_Feet/Legs/Body/Head`) but `enableShadows()`/`measureHeight()` both
+traverse generically, not by name, so this doesn't matter. Considered
+"Adventurer" (browns/greens, satchel, arguably reads more frontier/western)
+as an alternative — same pack, same rig, also verified — human picked Farmer.
+No genuinely cowboy-styled *rigged* CC0 model could be found anywhere
+searched (poly.pizza, Quaternius, Kenney, itch.io): the only models literally
+named "Cowboy"/"Cowgirl" (poly.pizza, by mastjie) are unrigged
+(`"Animated": false`), and the one rigged-looking western-adjacent find
+("Cops and Robbers") is CC-BY 3.0, not CC0, so it was correctly ruled out
+per the CC0-only rule.
 
-- `player.glb` — height **1.866**, width 1.676, depth 0.390. Very close to `PLAYER.modelHeight` (1.85) already; `character.js` still rescales dynamically off the measured box so this isn't hardcoded.
+**Measured round 1 (world-space bounding box via `gltf-transform`'s
+`getBounds`):**
+
+- Old `player.glb` ("Worker") — height **1.866**. Not re-measured for
+  "Farmer" since it doesn't matter: `character.js` rescales dynamically off
+  `measureHeight()`'s live reading (now trustworthy — see the matrixWorld fix
+  under "known rough edges"), never off a hardcoded number.
 - `horse.glb` — height **4.824**, depth **5.676** in its *rest pose*. That is not horse-sized — real horses are ~1.6m at the withers. **Round 2 should not trust `measureHeight()` on the horse without checking this first.** Likely cause: the rest/bind pose (frame the skin sits in with no animation applied) is posed unusually — maybe mid-gallop or reared — rather than a neutral T/A-pose. Round 2 needs to either measure height with a neutral clip's first frame applied, or hardcode a sanity-checked scale factor in config and say so. Flagged here, not solved — round 1 never loads horse.glb.
 
 Clip names, the `HitRecieve` misspelling, the `Run`/`Idle` substring-collision trap, and the horse's duplicated bare/`AnimalArmature|`-prefixed clips are all unchanged from round 0 — see BUILD-PLAN.md-era notes preserved below.

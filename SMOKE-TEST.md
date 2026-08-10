@@ -48,10 +48,12 @@ Controls: **WASD** move, **Shift** sprint, **Space** jump, **mouse** look
    visible sun, fog on the horizon, scattered rocks/cacti/dead trees, and
    grass around your feet. Nothing should look flat-shaded or "blocky voxel".
 4. **Spawn facing**: on load you should be looking at a large flat-topped mesa
-   in the distance, not empty ground. (If you're facing away from it or the
-   player model is walking backwards relative to its facing, that's a known
-   unverified item — see CLAUDE.md's "known rough edges" — flag which one it
-   is.)
+   in the distance, not empty ground.
+   - Player model is **"Farmer"** (Quaternius), not the hardhat-and-hi-vis
+     "Worker" round 1 originally shipped — swapped post-round-1 for a more
+     western-appropriate look, same rig/animations underneath. Character
+     should face and walk in the direction of movement, not backwards (this
+     was broken and fixed post-round-1 — flag it if it's somehow still wrong).
 5. **Mouse look** feels natural: moving the mouse right turns the view right,
    moving it up tilts the view up (or down, if it feels inverted — flag it,
    there's an `INPUT.invertY` config flag for this).
