@@ -2,12 +2,22 @@
  * character.js — the player's visual rig: loads player.glb, rescales it to
  * PLAYER.modelHeight, and wraps its idle/walk/run clips behind a small
  * uniform interface (`root`, `height`, `setLocomotion(state, speed)`,
- * `update(dt)`). Falls back to the procedural PlaceholderHuman (same
- * interface) if the GLB is missing or fails to load — the game must stay
- * playable either way.
+ * `setAirborne(bool)`, `update(dt)`). Falls back to the procedural
+ * PlaceholderHuman (same interface) if the GLB is missing or fails to load —
+ * the game must stay playable either way.
  *
  * player.js owns *which* logical state ('idle' | 'walk' | 'run') to request
  * each frame; this file only knows how to play that state once told.
+ *
+ * There is no dedicated jump clip. A retargeted real "Jump" clip (baked from
+ * a second CC0 GLB onto this rig's own skeleton — see git history around
+ * "retarget.js" if this is ever revisited) was built, tuned, and re-tuned
+ * across several rounds and never read as right in real play, so it was
+ * pulled out entirely rather than shipped broken. `setAirborne()` is now a
+ * no-op on the real rig: player.js already halves locomotion playback speed
+ * while airborne (`ANIM.airTimeScale`), so a jump just holds the current
+ * idle/walk/run pose, slowed, for the flight — see CLAUDE.md's "Known rough
+ * edges" for the removal writeup.
  */
 
 import * as THREE from 'three';
@@ -47,6 +57,16 @@ class PlayerCharacterRig {
     this._activeName = null;
     this._activate(this.actions.idle ? 'idle' : 'walk');
   }
+
+  /**
+   * No dedicated jump clip on this rig (see file header) — airborne motion
+   * is just whatever locomotion clip is already playing, slowed via
+   * player.js's own ANIM.airTimeScale. Kept as a method (not dropped
+   * entirely) so the shared character interface stays identical to
+   * PlaceholderHuman, which still has its own simple procedural crouch-tuck
+   * overlay for the no-GLTF-skeleton fallback case.
+   */
+  setAirborne(_airborne) {}
 
   /** Falls back to walk, then idle, if the requested clip doesn't exist on this model. */
   _resolveAvailable(name) {

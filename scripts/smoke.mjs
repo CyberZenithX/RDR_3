@@ -164,6 +164,20 @@ const CHECKS = [
     const tooSmall = factors.filter((f) => f < 1.2);
     return tooSmall.length === 0 ? null : `colliderFactors ${JSON.stringify(factors)} has values below the 1.2 safety floor`;
   }],
+  ['no leftover jump clip on the real player rig (removed feature)', async () => {
+    // Regression guard for the opposite direction now: the retargeted jump
+    // clip (retarget.js + config.js's ANIM_SOURCE/HIP_FOLLOW/KNEE_FOLLOW)
+    // was built, tuned repeatedly, and ultimately pulled out because it
+    // never read as right in real play — see CLAUDE.md's "Known rough
+    // edges". character.js should never construct a "jump" action anymore;
+    // this catches a partial revert that leaves the pipeline half-wired.
+    const info = await page.evaluate(() => ({
+      isPlaceholder: window.__debug?.modelsLoaded?.player === false,
+      hasJumpAction: !!window.__debug?.player?.character?.actions?.jump,
+    }));
+    if (info.isPlaceholder) return null; // placeholder fallback path, not applicable
+    return info.hasJumpAction ? 'character.actions.jump exists — the removed jump-clip pipeline is back' : null;
+  }],
 ];
 
 for (const [label, fn] of CHECKS) {

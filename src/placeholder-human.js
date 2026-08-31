@@ -11,7 +11,7 @@
  */
 
 import * as THREE from 'three';
-import { PLACEHOLDER, COLORS, ANIM, PLAYER } from './config.js';
+import { PLACEHOLDER, COLORS, ANIM, PLAYER, JUMP } from './config.js';
 
 function buildSegment(radius, halfLength, material) {
   const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(radius, halfLength * 2, 4, 8), material);
@@ -75,11 +75,18 @@ export class PlaceholderHuman {
     this._phase = 0;
     this._time = 0;
     this._speed = 0;
+    this._jumpWeight = 0;
+    this._jumpTargetWeight = 0;
   }
 
   /** Uniform interface with the real rig — `state` is unused here since speed alone drives the gait. */
   setLocomotion(_state, speed) {
     this._speed = speed;
+  }
+
+  /** Call once per frame with whether the player is currently airborne. */
+  setAirborne(airborne) {
+    this._jumpTargetWeight = airborne ? 1 : 0;
   }
 
   update(dt) {
@@ -106,6 +113,17 @@ export class PlaceholderHuman {
         this.legs[key].hip.rotation.x *= 1 - ease;
         this.legs[key].knee.rotation.x *= 1 - ease;
         this.arms[key].shoulder.rotation.x *= 1 - ease;
+      }
+    }
+
+    // Procedural jump-pose overlay -- symmetric bend on both legs, applied on
+    // top of whatever the locomotion pose above just set. Same exponential
+    // blend-rate formula as the real rig (character.js) and camera.js.
+    this._jumpWeight += (this._jumpTargetWeight - this._jumpWeight) * (1 - Math.exp(-JUMP.poseBlendRate * dt));
+    if (this._jumpWeight > 0.002) {
+      for (const key of ['L', 'R']) {
+        this.legs[key].hip.rotation.x = THREE.MathUtils.lerp(this.legs[key].hip.rotation.x, JUMP.placeholderHipBend, this._jumpWeight);
+        this.legs[key].knee.rotation.x = THREE.MathUtils.lerp(this.legs[key].knee.rotation.x, JUMP.placeholderKneeBend, this._jumpWeight);
       }
     }
   }

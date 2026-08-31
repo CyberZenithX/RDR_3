@@ -172,6 +172,12 @@ export const ANIM = {
   blendBand: 1.2, // width of the walk↔run crossfade band
   minTimeScale: 0.5,
   maxTimeScale: 2.0,
+  // No dedicated jump clip (see character.js's file header and CLAUDE.md's
+  // "Known rough edges" for the removal story) -- this is what makes a jump
+  // read as "airborne" at all: player.js multiplies the locomotion clip's
+  // driving speed by this before handing it to setLocomotion(), so the
+  // idle/walk/run pose that was already playing holds and slows down while
+  // in the air instead of continuing at full ground pace.
   airTimeScale: 0.3,
 };
 
@@ -188,6 +194,13 @@ export const CLIP_CANDIDATES = {
   idle: ['Idle', 'Idle_Neutral'],
   walk: ['Walk', 'Walk_Forward'],
   run: ['Run', 'Run_Forward', 'Sprint'],
+};
+
+/** Jump pose for the procedural PlaceholderHuman fallback (no GLTF skeleton to retarget onto). Rotation.x only, positive = bent, same convention as its walk/run swing code. */
+export const JUMP = {
+  poseBlendRate: 20, // exponential blend rate, same formula as camera.js
+  placeholderHipBend: 0.35,
+  placeholderKneeBend: 0.7,
 };
 
 /** Proportions for the capsule-and-limbs stand-in used if a GLB fails to load. */

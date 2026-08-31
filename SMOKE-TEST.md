@@ -69,6 +69,20 @@ Controls: **WASD** move, **Shift** sprint, **Space** jump, **mouse** look
 9. **Jump** (Space) has a believable arc and lands back on the terrain
    cleanly, including on a gentle slope, without clipping through the ground
    or hanging in the air.
+   - There is **no dedicated jump animation clip.** One was built (retargeted
+     at load time from a different CC0 pack) and tuned across several
+     rounds — a crouch/anticipation dip, a mid-air tuck, knee/foot fixes —
+     but never read as right in real play (legs that hooked, smeared boots,
+     an exaggerated sideways sweep, and even once those were fixed, still
+     "abrupt" and unnatural), so it was pulled out entirely rather than
+     shipped broken. See CLAUDE.md's "Known rough edges" for the full
+     history if it's ever worth revisiting (the code is in git history, not
+     in the current `src/`). What you should see instead: whatever
+     idle/walk/run pose was already playing holds and plays back slower
+     while airborne (`ANIM.airTimeScale` in `config.js`), then crossfades
+     normally back to full speed on landing. Not dynamic, but not broken
+     either — flag it only if the landing crossfade itself pops or the
+     character clips through the ground.
 10. **Camera collision**: walk the camera into a hillside or close behind a
     large rock — it should pull in smoothly rather than clipping through
     geometry or showing you the inside of the terrain.

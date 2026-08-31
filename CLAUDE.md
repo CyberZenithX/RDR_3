@@ -35,12 +35,12 @@ One line per file. Read only what the round needs.
 | `CLAUDE.md` | This file. |
 | `SMOKE-TEST.md` | Manual checklist for the human. Grow it every round, never delete a line. |
 | `scripts/verify-models.mjs` | Prints size / mesh / skin / clip-name report for every `models/*.glb`. Run after touching models. |
-| `scripts/smoke.mjs` | Headless check. Serves the folder on :8917, loads it in chromium, fails on any console error, uncaught exception, 4xx/failed request, or a render loop that never started. `CHECKS` array now also asserts: player.glb loaded (not placeholder), player Y settles (doesn't fall forever), player is grounded, all three prop kinds scattered with count > 0. **Add to `CHECKS` every round.** |
+| `scripts/smoke.mjs` | Headless check. Serves the folder on :8917, loads it in chromium, fails on any console error, uncaught exception, 4xx/failed request, or a render loop that never started. `CHECKS` array now also asserts: player.glb loaded (not placeholder), player Y settles (doesn't fall forever), player is grounded, all three prop kinds scattered with count > 0, character scale/mesh-yaw-offset sane, rock collider factors floor, and that no jump-clip action ever gets constructed (the retarget pipeline was removed — see "Known rough edges"). **Add to `CHECKS` every round.** |
 | `.claude/commands/round.md` | `/round N` slash command. |
 | `.claude/launch.json` | Added this round so the Browser-preview tool can serve the project (`npx serve . -l 5311`) for visual spot-checks. Not part of the shipped game. |
-| `models/` | `player.glb`, `bandit.glb`, `horse.glb`. See inventory below — unchanged this round. |
+| `models/` | `player.glb`, `bandit.glb`, `horse.glb`. See inventory below. |
 | `audio/` | Still empty. Round 3 fetches `gunshot.ogg`, `reload.ogg`, `hit.ogg`; round 7 fetches the rest. |
-| `src/config.js` | Every tunable number, grouped by system (`RENDER`, `COLORS`, `SKY`, `SUN`, `FOG`, `WORLD`, `TERRAIN`, `TOWN`, `BOUNDARY`, `MESAS`, `SPAWN`, `PLAYER`, `ANIM`, `CLIP_REFERENCE_SPEED`, `CLIP_CANDIDATES`, `PLACEHOLDER`, `CAMERA`, `INPUT`, `PROPS`, `GRASS`, `UI`). 308 lines. Read this first when tuning anything. |
+| `src/config.js` | Every tunable number, grouped by system (`RENDER`, `COLORS`, `SKY`, `SUN`, `FOG`, `WORLD`, `TERRAIN`, `TOWN`, `BOUNDARY`, `MESAS`, `SPAWN`, `PLAYER`, `ANIM`, `CLIP_REFERENCE_SPEED`, `CLIP_CANDIDATES`, `JUMP`, `PLACEHOLDER`, `CAMERA`, `INPUT`, `PROPS`, `GRASS`, `UI`). No jump-clip retarget config anymore (`ANIM_SOURCE`/`HIP_FOLLOW`/`KNEE_FOLLOW` were removed along with the feature — see "Known rough edges"); `JUMP` is placeholder-only fallback pose constants. Read this first when tuning anything. |
 | `src/noise.js` | Seeded PRNG (`makeRng`, mulberry32) + 2D simplex noise (`SimplexNoise2D`) + `fbm2D` + `smoothstep`. No dependencies on anything else in `src/`. |
 | `src/terrain.js` | `heightAt(x,z)` — the analytic terrain function (fbm + domain warp + ridged noise + mesas + town plateau + boundary ridge, all smoothstep-blended). `normalAt(x,z)` via finite differences. `buildTerrain(scene)` builds the vertex-colored mesh. `groundHeightAt(x,z)` — **now just calls `heightAt`, not a raycast.** See the big comment at its definition for why; this is the one deliberate deviation from a literal reading of the locked "raycast onto the mesh" line, done for a measured, serious performance reason. |
 | `src/sky.js` | Gradient sky dome (custom `ShaderMaterial`, zenith/horizon/sun-disc), sun `DirectionalLight` + `HemisphereLight`, `FogExp2`. `updateShadowFollow` keeps the shadow camera centered on the player every frame. |
@@ -49,8 +49,8 @@ One line per file. Read only what the round needs.
 | `src/grass.js` | Grass tufts (crossed triangle blades, vertex-colored root→tip) as one fixed-size `InstancedMesh` pool that **follows the player**, re-bucketed onto a world-space jittered grid (deterministic per cell via hashing, so it doesn't visibly reshuffle) whenever the player moves `GRASS.recenterDistance`. |
 | `src/world.js` | Orchestrator only — calls terrain/sky/props/grass builders, wires `update(playerPos)` (shadow follow + grass recenter) and exposes `groundHeightAt`. ~35 lines on purpose. |
 | `src/assets.js` | `loadGLTF(path)`, `findClip(gltf, ...candidates)` (the exact-then-substring contract), `measureHeight(object3D)`, `enableShadows(root)`. Generic, reused by every character loader (bandit/horse in later rounds should go through this too). |
-| `src/placeholder-human.js` | `PlaceholderHuman` — the "GLB failed to load" fallback. Hand-built `Group` hierarchy (hips→torso/head, shoulder→elbow arms, hip→knee legs) of `CapsuleGeometry` meshes, animated **procedurally** (sinusoidal swing driven directly by current speed, no `AnimationMixer`, no baked clips). Implements the same interface as the real rig. |
-| `src/character.js` | `createPlayerCharacter()` — loads `player.glb`, rescales to `PLAYER.modelHeight`, wraps its `idle`/`walk`/`run` clips behind `{root, height, setLocomotion(state,speed), update(dt)}`. Falls back to `PlaceholderHuman` on any load failure *or* if neither an idle nor a walk clip is found. |
+| `src/placeholder-human.js` | `PlaceholderHuman` — the "GLB failed to load" fallback. Hand-built `Group` hierarchy (hips→torso/head, shoulder→elbow arms, hip→knee legs) of `CapsuleGeometry` meshes, animated **procedurally** (sinusoidal swing driven directly by current speed, no `AnimationMixer`, no baked clips). Implements the same interface as the real rig, including `setAirborne(bool)` for its own simple procedural jump-crouch overlay — unaffected by the real rig's jump-clip removal below, this was always a separate, simpler mechanism. |
+| `src/character.js` | `createPlayerCharacter()` — loads `player.glb`, rescales to `PLAYER.modelHeight`, wraps its `idle`/`walk`/`run` clips behind `{root, height, setLocomotion(state,speed), setAirborne(bool), update(dt)}`. **No jump clip** — `setAirborne` is a no-op; player.js's `ANIM.airTimeScale` already slows the current locomotion clip while airborne, which is all that ships now (see "Known rough edges" for what was tried and removed). Falls back to `PlaceholderHuman` on any load failure *or* if neither an idle nor a walk clip is found. |
 | `src/input.js` | Keyboard `Set`, pointer lock (`initInput(canvas)`), raw `movementX/Y` accumulation (`consumeMouseDelta`), `onPointerLockChanged(fn)` listener. |
 | `src/camera.js` | `ThirdPersonCamera` — mouse orbit (yaw/pitch), collision-aware distance (heightfield march + collider-circle sweep, **not** a mesh raycast — same perf reason as terrain), sway while moving. `getForward()`/`getRight()` are the shared convention player.js uses for WASD. |
 | `src/player.js` | `Player` class — accel/decel movement, jump with coyote time + jump buffer, gravity, ground snap via `groundHeightAt`, prop collision + boundary clamp, mesh-facing turn, and the idle/walk/run hysteresis state machine (`classifySpeed`) feeding `character.setLocomotion`. |
@@ -61,13 +61,19 @@ One line per file. Read only what the round needs.
 
 ## Models — inventory
 
-All three are **Quaternius, CC0 1.0**, pulled from poly.pizza.
+All three are **Quaternius, CC0 1.0**.
 
 | File | Source model | Origin | KB | Meshes | Skins |
 |---|---|---|---|---|---|
 | `models/player.glb` | "Farmer" (Ultimate Modular Men Pack) | `poly.pizza/m/7pn3R6hPvE` | 1338 | 4 | 4 |
 | `models/bandit.glb` | "Punk" (Ultimate Modular Men Pack) | `poly.pizza/m/BTALZymknF` | 1342 | 4 | 4 |
 | `models/horse.glb` | "Horse" (Animated Animal Pack) | `poly.pizza/m/qvTrSG9pZF` | 1082 | 1 | 1 |
+
+A fourth model, `anim-source-jump.glb` ("Man", Animated Men Pack, CC0), was
+loaded purely to harvest a `Man_Jump` clip + skeleton for retargeting onto
+`player.glb` — never rendered itself. Removed along with the whole
+retargeted-jump-clip feature (see "Known rough edges"); if that work is ever
+revisited, it's still in git history around `src/retarget.js`.
 
 **`player.glb` swapped post-round-1 from "Worker" to "Farmer"** — the human
 asked for something more appropriate for a western/horse game than a
@@ -167,7 +173,9 @@ missing across both humanoids; nothing is missing for round 1 specifically
 **Substitutions — unchanged from round 0's plan, none of them implemented yet
 (round 1 didn't need any):**
 
-- **`Reload` → fake.** Bone rotation on `Wrist.R`/`LowerArm.R`. *(Round 3 owns this.)*
+- **`Reload` → fake.** Bone rotation on `Wrist.R`/`LowerArm.R` — at runtime that's
+  `getObjectByName('WristR')`/`('LowerArmR')`, dots stripped; see the gotcha in
+  "Skeleton — bone names". *(Round 3 owns this.)*
 - **`Mount`/`Dismount` → no clip.** Lerp position/rotation onto the saddle point over 0.4s. *(Round 2.)*
 - **Mounted shooting → partial-skeleton blend** of `Idle_Gun_Shoot` over the riding pose. *(Round 3.)*
 - **Duel draw** *(round 6)* — `Idle_Gun_Pointing`.
@@ -181,11 +189,73 @@ Nothing needs procedural recoil faking: `Gun_Shoot` is a real clip.
 **The right hand bone is `Wrist.R`.** Round 3 attaches the revolver to it; keep the
 BUILD-PLAN.md names as fallbacks for a future model swap.
 
+**GOTCHA, found post-round-1 while building the jump pose: those dotted names
+are the *source-file* names, not what's queryable at runtime.** `GLTFLoader`
+strips every dot from node names on load — `UpperArm.L` becomes `UpperArmL`,
+`Wrist.R` becomes `WristR` — because a dot is the path separator inside an
+`AnimationClip` track's target string (`"boneName.quaternion"`), so a dot
+*inside* a bone name would be ambiguous there. Confirmed directly: loaded
+`player.glb` fresh and traversed the resulting scene graph, printing every
+node's `.name` — `root.getObjectByName('UpperArm.L')` returns `undefined`,
+`root.getObjectByName('UpperArmL')` returns the bone. **Any future
+`getObjectByName()` call against a loaded GLTF — round 3's `Wrist.R` gun
+attachment included — needs the dot-less form**, even though this file (and
+the BUILD-PLAN.md-era notes) write the dotted form everywhere, because that's
+the form that shows up in a `gltf-transform`/Blender node dump, which is a
+*different* naming stage than what `GLTFLoader` hands back at runtime.
+
 Humanoid rig: `RootNode` → `CharacterArmature` → `Root` → `Hips` → `Chest` →
-`Head` (+ `Head_end`), arms as `UpperArm.L/R` → `LowerArm.L/R` → `Wrist.L/R`.
-85 nodes. **4 separate skinned meshes** (`Worker_Feet/Legs/Body/Head`) sharing one
+`Head` (+ `Head_end`), arms as `UpperArm.L/R` → `LowerArm.L/R` → `Wrist.L/R`
+(source names — see gotcha above for the runtime, dot-less form). 85 nodes.
+**4 separate skinned meshes** (`Worker_Feet/Legs/Body/Head`) sharing one
 armature — `enableShadows()` in `assets.js` already traverses and sets
 `castShadow`/`receiveShadow` on all of them, not just the first.
+
+**THE LEG "CHAIN" IS NOT A CHAIN — read this before animating legs.** An
+earlier version of this file said legs "hang off `UpperLeg.L/R` →
+`LowerLeg.L/R` → `Foot.L/R`". That is wrong about the foot, and the mistake
+cost two failed fixes. Measured directly (traversing the loaded rig and
+printing `.parent.name`, then empirically rotating a bone and reading world
+positions):
+
+```
+Body → UpperLegL → LowerLegL → LowerLegL_end
+Root → FootL → FootL_end          ← the foot is its OWN top-level bone
+Body → Hips → Abdomen → …         ← Hips is a SIBLING of UpperLeg, not its parent
+```
+
+Rotating `UpperLegL` by 57° moves `LowerLegL` **0.415 units** in world space
+and moves `FootL` by **exactly 0.0**. Rotating `Hips` moves `UpperLegL` by
+**exactly 0.0**. So:
+
+- **Any clip that animates the legs must ALSO author `Foot.L/R` tracks —
+  both `.position` and `.quaternion`.** The foot will not follow the shin,
+  because it is not attached to it. `player.glb`'s own `Walk`/`Run`/`Idle`
+  clips all author `FootL.position` *and* `FootL.quaternion` every frame
+  (both verified `varying: true`) precisely because the animator had to
+  place the foot by hand. A rotation-only track is not enough: the foot is
+  positioned in `Root`'s space, so keeping it attached to a swinging shin
+  requires moving it, not just turning it.
+- **Leaving the foot un-animated does not leave it in a neutral pose** — it
+  leaves it welded in place while the shin swings away, and the skin between
+  them smears into a long curved "boomerang boot". This is a *skinning
+  stretch*, not a rotation error, which is why it is so easy to misdiagnose
+  (see "Known rough edges").
+- A technique for exactly this problem (`addVirtualParentTracks()`: bake the
+  tracks a bone would need to follow another bone as if it were its child)
+  was built in `src/retarget.js` for the now-removed retargeted jump clip
+  (see "Known rough edges") and deleted along with it. If a future round
+  (round 4's bandit shares this exact skeleton) needs to animate the legs
+  again — via retargeting or any other method that produces a `Foot.L/R`-
+  driving clip — this problem will resurface; the technique is sound and
+  sitting in git history, not lost, just not currently in `src/`.
+- `Hips` being a sibling of the legs is a latent version of the same trap.
+  It happened not to bite on the removed jump clip (measured at the time:
+  `Hips` rotated **0°** and `Abdomen` **0°** across that clip, `Torso` only
+  3.5°), so it was deliberately left alone rather than destabilise
+  verified-good leg motion. **A future clip that genuinely rotates the
+  pelvis will need the same follow-the-parent treatment on `UpperLegL/R` →
+  `Hips` too.** Measure before assuming it's fine.
 
 Horse rig: `RootNode` → `AnimalArmature`, with `Head`. 68 nodes. No hand/wrist
 bones. Saddle point will be a hand-tuned offset in `config.js` (round 2).
@@ -286,9 +356,17 @@ group names. Highlights a later round will specifically reach for:
   later upstream) — `camera.js` hand-rolls exponential smoothing instead. Don't
   add a `MathUtils.damp` call anywhere without checking this again.
 - Smoke server port **8917**; `window.__frames`/`__ready` still both kept alive
-  every frame. `window.__debug` is new this round —
-  `{modelsLoaded:{player}, playerY, grounded, propCounts}` — extend it, don't
-  replace it, when a later round adds its own machine-checkable state.
+  every frame. `window.__debug`'s shape has grown across this round's fixes —
+  current fields: `modelsLoaded:{player}`, `playerY`, `grounded`, `propCounts`,
+  `scene`/`tpCamera`/`player` (live object refs, see below), `characterScale`,
+  `characterWorldBBoxHeight`, `playerPos`, `cameraPos`,
+  `cameraDistanceToPlayer`, `cameraCurrentDistance`, `cameraFov`,
+  `characterRotationY`. (`jumpClipLoaded`/`jumping` existed for one round
+  while there was a retargeted jump clip to report on — removed along with
+  the feature, see "Known rough edges".) Extend it, don't replace it, when a
+  later round adds its own machine-checkable state — and if you add a field
+  here, update this list, it's already fallen out of sync with `main.js`
+  once this round.
 
 ---
 
@@ -529,13 +607,54 @@ group names. Highlights a later round will specifically reach for:
   consistently everywhere, not just on spawn. Not re-verified visually (see
   "I cannot get a screenshot" above) but the math is unambiguous here — no
   further lever if it's somehow still wrong, just double-check the sign.
-- **Jump has no dedicated animation — this is intentional, not a gap.** Asked
-  about by the human after the mesh-facing fix. Per BUILD-PLAN.md's clip
-  table, only `Idle`/`Walk`/`Run`/`Shoot`/`Reload`/`Hit`/`Death` need a
-  real-or-faked clip; jump isn't in that list and the asset pack has no jump
-  clip anyway. See "no dedicated jump animation" further down — airborne, the
-  last locomotion clip keeps playing at a slowed `timeScale`
-  (`ANIM.airTimeScale`). Not a round-1 shortfall; nothing to fix here.
+- **Removed post-round-1: the real retargeted jump clip, after extensive
+  work, never read as right — pulled out entirely rather than shipped
+  broken.** Long history, condensed (full blow-by-blow is in git history on
+  this file and on `src/character.js`/`src/config.js` around this round, and
+  in `src/retarget.js` before it was deleted): round 1 shipped airborne as
+  just holding the last locomotion clip at a slowed `timeScale`
+  (`ANIM.airTimeScale`). A procedural hand-tuned leg-tuck overlay replaced
+  that, then was itself replaced by a genuinely real motion-authored clip
+  (`Man_Jump`, Quaternius "Animated Men Pack", CC0), retargeted at load time
+  from that separate GLB's skeleton onto `player.glb`'s own via a new
+  `src/retarget.js` (local-space delta-from-rest quaternion retargeting,
+  plus same-skeleton "follower" techniques for bones the cross-skeleton
+  retarget distorted).
+  - Verifying it "looked right" failed repeatedly in ways worth remembering
+    for any future animation work: a 6-point sample missed a real hooked-
+    ankle bug that only showed up across ~30-70% of the clip from a true
+    side view; two rounds of "fixed" reports turned out to have changed
+    nothing because the actual bug was the feet (separate top-level bones
+    on this rig, not attached to the legs — still true, see "Skeleton — bone
+    names" below) never being driven at all, a *skinning smear* that looks
+    like a rotation bug and isn't one; a "fixed" verification pass once
+    nearly reported a false regression that was actually a test script
+    bypassing the game's own crossfade logic. Each time, the fix that
+    actually worked came from measuring the live rig directly (dumping the
+    real parent hierarchy, rotating a bone and reading world positions)
+    rather than trusting notes or a prior diagnosis.
+  - Even after every distortion/smear bug was genuinely fixed and verified
+    through the real Space-triggered gameplay path, further tuning passes
+    (softer knee bend, softer hip swing, slower clip playback for a less
+    "abrupt" feel) still didn't land — the human's final verdict was "this
+    is not working at all." **Decision: remove the feature.**
+    `character.js` no longer loads a second GLB or constructs a `jump`
+    action; `setAirborne()` is a no-op on the real rig. Airborne motion is
+    now, again, just whatever locomotion clip was already playing, held and
+    slowed via `ANIM.airTimeScale` — not dynamic, but not broken either.
+    `src/retarget.js` and `models/anim-source-jump.glb` were deleted (their
+    only purpose was this feature); `ANIM_SOURCE`/`HIP_FOLLOW`/`KNEE_FOLLOW`/
+    `ANIM.jumpTimeScale` were removed from `config.js`.
+  - **If this is ever revisited**: don't restart from scratch. The technique
+    (delta-from-rest retargeting + same-skeleton follower bends for bones
+    whose cross-skeleton retarget distorts + `addVirtualParentTracks` for
+    detached bones like this rig's feet) is sound and well-verified — it's
+    in git history. What was missing wasn't correctness, it was ever
+    actually reading as good motion to a human watching it in real play,
+    across several honest tuning attempts. A different source clip, or
+    accepting a simpler/more stylized jump pose instead of chasing
+    photorealistic motion capture, are both more promising directions than
+    another round of retarget-parameter tuning.
 - **Headless smoke runs slow — this is the test environment, not the game.**
   `scripts/smoke.mjs` measured ~3fps in headless chromium's software rasterizer
   with the full 2048 `PCFSoftShadowMap` on. Real GPUs handle 2048 soft shadows
@@ -554,12 +673,6 @@ group names. Highlights a later round will specifically reach for:
   bent** (each capsule is rigidly parented, no smooth-skin blending between
   segments). Deliberate — see "Decisions made" above. It's a fallback path that,
   per the current assets, never actually runs.
-- **Jump has no dedicated animation** — not required by BUILD-PLAN.md's clip
-  table (only `Idle`/`Walk`/`Run`/`Shoot`/`Reload`/`Hit`/`Death` are listed as
-  needing a real-or-faked clip) and the asset pack has no jump clip anyway.
-  Airborne, the last locomotion clip keeps playing at a slowed `timeScale`
-  (`ANIM.airTimeScale`). Reads fine for a short hop; would look off for a long
-  fall, but there's no long-fall gameplay yet.
 - **Camera's `lookAt` is recomputed instantly from a damped position every
   frame**, not itself damped. Not visually confirmed, but the math says this
   could look slightly swimmy for one or two frames right after a big

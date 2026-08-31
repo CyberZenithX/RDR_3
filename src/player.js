@@ -146,6 +146,7 @@ export class Player {
     this.animState = classifySpeed(this.speed, this.animState);
     const animSpeed = this.grounded ? this.speed : this.speed * ANIM.airTimeScale;
     this.character.setLocomotion(this.animState, animSpeed);
+    this.character.setAirborne(!this.grounded);
     this.character.update(dt);
 
     // ------------------------------------------------------- transform ---
