@@ -7,6 +7,7 @@
 
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { existsSync, readdirSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { chromium } from 'playwright';
 
@@ -46,8 +47,55 @@ const server = createServer(async (req, res) => {
 
 await new Promise((r) => server.listen(PORT, r));
 
+// --------------------------------------------------------------- chromium ---
+// `chromium.launch()` normally finds the browser Playwright downloaded for
+// itself. Some sandboxes (Claude Code's web/remote containers among them)
+// instead ship a *pre-installed* chromium under PLAYWRIGHT_BROWSERS_PATH whose
+// build number doesn't match whatever Playwright version is in node_modules,
+// and block `playwright install` from fetching the matching one — so launch()
+// dies with "Executable doesn't exist at .../chromium_headless_shell-<n>/...".
+// The pre-installed binary runs this page fine, so fall back to any chromium
+// actually present on disk rather than failing the whole smoke run.
+// Override explicitly with SMOKE_CHROMIUM=/path/to/chrome.
+
+/** Chromium binaries that exist on this machine, best candidate first. */
+function chromiumCandidates() {
+  const browsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH || '/opt/pw-browsers';
+  // The bare `chromium` entry is a symlink these images provide; the
+  // `chromium-<build>/chrome-linux/chrome` entries are Playwright's own layout.
+  const paths = [join(browsersPath, 'chromium')];
+  try {
+    for (const entry of readdirSync(browsersPath)) {
+      if (entry.startsWith('chromium-')) paths.push(join(browsersPath, entry, 'chrome-linux', 'chrome'));
+    }
+  } catch { /* no browsers dir — the system paths below may still hit */ }
+  paths.push('/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome');
+  return paths.filter((p) => existsSync(p));
+}
+
+async function launchChromium() {
+  const override = process.env.SMOKE_CHROMIUM;
+  if (override) {
+    if (!existsSync(override)) throw new Error(`SMOKE_CHROMIUM=${override} does not exist`);
+    return chromium.launch({ executablePath: override });
+  }
+  try {
+    return await chromium.launch();
+  } catch (err) {
+    for (const executablePath of chromiumCandidates()) {
+      try {
+        const fallback = await chromium.launch({ executablePath });
+        console.log(`smoke: playwright's own chromium is missing — using ${executablePath}`);
+        return fallback;
+      } catch { /* not usable either; try the next candidate */ }
+    }
+    // Nothing on disk worked, so Playwright's own error is the useful one.
+    throw err;
+  }
+}
+
 const problems = [];
-const browser = await chromium.launch();
+const browser = await launchChromium();
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 
 page.on('console', (m) => {

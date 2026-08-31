@@ -35,7 +35,7 @@ One line per file. Read only what the round needs.
 | `CLAUDE.md` | This file. |
 | `SMOKE-TEST.md` | Manual checklist for the human. Grow it every round, never delete a line. |
 | `scripts/verify-models.mjs` | Prints size / mesh / skin / clip-name report for every `models/*.glb`. Run after touching models. |
-| `scripts/smoke.mjs` | Headless check. Serves the folder on :8917, loads it in chromium, fails on any console error, uncaught exception, 4xx/failed request, or a render loop that never started. `CHECKS` array now also asserts: player.glb loaded (not placeholder), player Y settles (doesn't fall forever), player is grounded, all three prop kinds scattered with count > 0, character scale/mesh-yaw-offset sane, rock collider factors floor, and that no jump-clip action ever gets constructed (the retarget pipeline was removed — see "Known rough edges"). **Add to `CHECKS` every round.** |
+| `scripts/smoke.mjs` | Headless check. Serves the folder on :8917, loads it in chromium, fails on any console error, uncaught exception, 4xx/failed request, or a render loop that never started. `CHECKS` array now also asserts: player.glb loaded (not placeholder), player Y settles (doesn't fall forever), player is grounded, all three prop kinds scattered with count > 0, character scale/mesh-yaw-offset sane, rock collider factors floor, and that no jump-clip action ever gets constructed (the retarget pipeline was removed — see "Known rough edges"). **Add to `CHECKS` every round.** Launches chromium through a fallback (`launchChromium()`): if Playwright's own browser build is missing it tries every chromium actually on disk (`PLAYWRIGHT_BROWSERS_PATH`, then `/usr/bin/chromium*`), or whatever `SMOKE_CHROMIUM=/path/to/chrome` names — needed because sandboxes ship a pre-installed chromium whose build number doesn't match `node_modules`. |
 | `.claude/commands/round.md` | `/round N` slash command. |
 | `.claude/launch.json` | Added this round so the Browser-preview tool can serve the project (`npx serve . -l 5311`) for visual spot-checks. Not part of the shipped game. |
 | `models/` | `player.glb`, `bandit.glb`, `horse.glb`. See inventory below. |
@@ -745,6 +745,21 @@ group names. Highlights a later round will specifically reach for:
     accepting a simpler/more stylized jump pose instead of chasing
     photorealistic motion capture, are both more promising directions than
     another round of retarget-parameter tuning.
+- **`node scripts/smoke.mjs` cannot fully pass in an egress-restricted session
+  — the page itself is offline-hostile.** `index.html`'s import map pulls
+  three.js and its addons from `cdn.jsdelivr.net`, and that host (like
+  `poly.pizza`/`quaternius.com`/`mixamo.com`) is 403'd by some sessions' egress
+  proxy, so every module import fails, the render loop never starts, and all
+  the round-1 `__debug` checks report `undefined`. The browser launch itself is
+  fine — `launchChromium()` handles the mismatched-build case (see the file map)
+  and was verified starting `/opt/pw-browsers/chromium` and loading the local
+  server. **Don't chase the `undefined` checks as a game bug**; check whether
+  `curl https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js`
+  succeeds first. Routing chromium through `HTTPS_PROXY` does not help when the
+  proxy is what's denying the host. The real fix, if offline smoke runs ever
+  matter, is vendoring three.js into the repo and pointing the import map at
+  the local copy — a deliberate change to the project's CDN/no-build setup, so
+  raise it before doing it.
 - **Headless smoke runs slow — this is the test environment, not the game.**
   `scripts/smoke.mjs` measured ~3fps in headless chromium's software rasterizer
   with the full 2048 `PCFSoftShadowMap` on. Real GPUs handle 2048 soft shadows
