@@ -30,12 +30,13 @@ One line per file. Read only what the round needs.
 
 | File | What's in it |
 |---|---|
-| `index.html` | Import map + overlay markup (loading screen, click-to-play, boundary-warning vignette) + CSS. Boots `/src/main.js` as a module. No inline game code anymore. |
+| `index.html` | Import map (points `three`/`three/addons/` at `/vendor/three/`, not a CDN — see "Known rough edges") + overlay markup (loading screen, click-to-play, boundary-warning vignette) + CSS + a data-URI favicon. Boots `/src/main.js` as a module. No inline game code anymore. |
+| `vendor/three/` | three.js **0.160.0**, vendored from the npm package (not a submodule, not `node_modules` — committed files). Only what the codebase imports: `build/three.module.js`, `examples/jsm/loaders/GLTFLoader.js`, `examples/jsm/utils/BufferGeometryUtils.js`, `LICENSE`. See "Known rough edges" for why (CDN-loaded three.js made `scripts/smoke.mjs` unrunnable in egress-restricted sessions) and how to extend it if a later round imports another addon. |
 | `BUILD-PLAN.md` | The spec. Read every round. |
 | `CLAUDE.md` | This file. |
 | `SMOKE-TEST.md` | Manual checklist for the human. Grow it every round, never delete a line. |
 | `scripts/verify-models.mjs` | Prints size / mesh / skin / clip-name report for every `models/*.glb`. Run after touching models. |
-| `scripts/smoke.mjs` | Headless check. Serves the folder on :8917, loads it in chromium, fails on any console error, uncaught exception, 4xx/failed request, or a render loop that never started. `CHECKS` array now also asserts: player.glb loaded (not placeholder), player Y settles (doesn't fall forever), player is grounded, all three prop kinds scattered with count > 0, character scale/mesh-yaw-offset sane, rock collider factors floor, and that no jump-clip action ever gets constructed (the retarget pipeline was removed — see "Known rough edges"). **Add to `CHECKS` every round.** |
+| `scripts/smoke.mjs` | Headless check. Serves the folder on :8917, loads it in chromium, fails on any console error, uncaught exception, 4xx/failed request, or a render loop that never started. `CHECKS` array now also asserts: player.glb loaded (not placeholder), player Y settles (doesn't fall forever), player is grounded, all three prop kinds scattered with count > 0, character scale/mesh-yaw-offset sane, rock collider factors floor, and that no jump-clip action ever gets constructed (the retarget pipeline was removed — see "Known rough edges"). **Add to `CHECKS` every round.** Launches chromium through a fallback (`launchChromium()`): if Playwright's own browser build is missing it tries every chromium actually on disk (`PLAYWRIGHT_BROWSERS_PATH`, then `/usr/bin/chromium*`), or whatever `SMOKE_CHROMIUM=/path/to/chrome` names — needed because sandboxes ship a pre-installed chromium whose build number doesn't match `node_modules`. |
 | `.claude/commands/round.md` | `/round N` slash command. |
 | `.claude/launch.json` | Added this round so the Browser-preview tool can serve the project (`npx serve . -l 5311`) for visual spot-checks. Not part of the shipped game. |
 | `models/` | `player.glb`, `bandit.glb`, `horse.glb`. See inventory below. |
@@ -72,8 +73,11 @@ All three are **Quaternius, CC0 1.0**.
 A fourth model, `anim-source-jump.glb` ("Man", Animated Men Pack, CC0), was
 loaded purely to harvest a `Man_Jump` clip + skeleton for retargeting onto
 `player.glb` — never rendered itself. Removed along with the whole
-retargeted-jump-clip feature (see "Known rough edges"); if that work is ever
-revisited, it's still in git history around `src/retarget.js`.
+retargeted-jump-clip feature (see "Known rough edges"). **It was never
+committed** — neither the GLB nor `src/retarget.js` appears anywhere in this
+repo's history, so re-fetching the model and rewriting the code is the only
+way back. `poly.pizza` is 403'd by this environment's egress proxy, so that
+re-fetch is a human-side task too.
 
 **`player.glb` swapped post-round-1 from "Worker" to "Farmer"** — the human
 asked for something more appropriate for a western/horse game than a
@@ -204,12 +208,38 @@ the BUILD-PLAN.md-era notes) write the dotted form everywhere, because that's
 the form that shows up in a `gltf-transform`/Blender node dump, which is a
 *different* naming stage than what `GLTFLoader` hands back at runtime.
 
-Humanoid rig: `RootNode` → `CharacterArmature` → `Root` → `Hips` → `Chest` →
-`Head` (+ `Head_end`), arms as `UpperArm.L/R` → `LowerArm.L/R` → `Wrist.L/R`
-(source names — see gotcha above for the runtime, dot-less form). 85 nodes.
-**4 separate skinned meshes** (`Worker_Feet/Legs/Body/Head`) sharing one
+Humanoid rig: `RootNode` → `CharacterArmature` → `Root` → `Body` → `Hips` →
+`Abdomen` → `Torso` → `Chest` → `Neck` → `Head` (+ `Head_end`), arms as
+`Shoulder.L/R` → `UpperArm.L/R` → `LowerArm.L/R` → `Wrist.L/R` (source names —
+see gotcha above for the runtime, dot-less form). 85 nodes.
+**4 separate skinned meshes** (`Farmer_Feet/Pants/Body/Head`) sharing one
 armature — `enableShadows()` in `assets.js` already traverses and sets
 `castShadow`/`receiveShadow` on all of them, not just the first.
+(An earlier version of this line wrote the spine as `Root → Hips → Chest →
+Head`, skipping `Body`/`Abdomen`/`Torso`/`Neck` — corrected here after
+re-dumping the node list straight out of the GLB.)
+
+**This is an IK rig baked flat on export — that is the single most important
+structural fact about it.** Measured across all 24 clips in `player.glb`
+(`@gltf-transform/core`, reading every animation channel's target node and
+path):
+
+| Bone | Parent | Animated by | Carries |
+|---|---|---|---|
+| `Body` | `Root` | **all 24 clips** | `translation` (all 24) + `rotation` (19) — this is the de-facto pelvis |
+| `Hips` | `Body` | **zero clips** | nothing, ever — it is a dead pass-through bone on this rig |
+| `Foot.L/R` | `Root` | 13 clips | `translation` **and** `rotation`, in `Root` space |
+| `PT.L/R` | `Root` | 13 clips | `translation` (+ `rotation` in 3 clips) — Blender **pole targets** (knee direction), exported as real bones |
+| `Abdomen` | `Hips` | 5 clips | `rotation` only (`Kick_*`, `Punch_*`, `Roll`) |
+
+So `Root` has **five** direct children — `Body`, `Foot.L`, `Foot.R`, `PT.L`,
+`PT.R` — and the legs' whole story is told by `Body.translation` plus
+hand-placed feet, not by an FK hip→knee→ankle chain. Every external rig you
+might import a clip from (Mixamo, Quaternius' other packs, anything) is a
+plain FK chain with the vertical motion in `Hips.translation`. On this rig
+that maps to **`Body`, not `Hips`** — writing it to `Hips` animates literally
+nothing, because nothing downstream of `Hips` is a leg. See "Should we add a
+jump clip…" under "Decisions made" for what this costs.
 
 **THE LEG "CHAIN" IS NOT A CHAIN — read this before animating legs.** An
 earlier version of this file said legs "hang off `UpperLeg.L/R` →
@@ -247,8 +277,17 @@ and moves `FootL` by **exactly 0.0**. Rotating `Hips` moves `UpperLegL` by
   (see "Known rough edges") and deleted along with it. If a future round
   (round 4's bandit shares this exact skeleton) needs to animate the legs
   again — via retargeting or any other method that produces a `Foot.L/R`-
-  driving clip — this problem will resurface; the technique is sound and
-  sitting in git history, not lost, just not currently in `src/`.
+  driving clip — this problem will resurface.
+  **CORRECTION, verified: that code is NOT in git history.** This file said
+  twice that `src/retarget.js` was "sitting in git history, not lost". It
+  isn't. `git log --all --pretty=format: --name-only | sort -u` lists every
+  path this repo has ever tracked, and neither `src/retarget.js` nor
+  `models/anim-source-jump.glb` is among them — the whole retarget effort
+  lived and died inside one uncommitted session, and the human's `50df173
+  "Pre-jump addition"` commit captured only the *post-removal* end state.
+  **Reviving it means rewriting it from scratch, not `git show`-ing it.**
+  Budget accordingly, and don't promise a future round a fallback that
+  doesn't exist.
 - `Hips` being a sibling of the legs is a latent version of the same trap.
   It happened not to bite on the removed jump clip (measured at the time:
   `Hips` rotated **0°** and `Abdomen` **0°** across that clip, `Torso` only
@@ -323,6 +362,55 @@ Materials are flat named colours, no textures.
   crash).
 - **`.claude/launch.json` added** so the Browser-preview tool can serve the
   project. `npx serve . -l 5311`. Not part of the shipped game; a dev convenience.
+- **"Should we add a jump clip from the Quaternius pack or from Mixamo?" —
+  investigated, answer: neither, not as a single imported clip.** Findings,
+  all measured rather than recalled:
+  - **The Quaternius option does not exist.** `player.glb`'s pack (Ultimate
+    Modular Men Pack) ships **exactly the 24 clips we already have** — the
+    poly.pizza export is the whole set, not a subset, so there is no unused
+    `Jump` hiding in the upstream download. "A jump from Quaternius"
+    therefore means *a different Quaternius pack*, i.e. a different
+    skeleton, i.e. the exact cross-rig retarget that was already built,
+    tuned, and rejected (that's what `anim-source-jump.glb` was).
+  - **Mixamo is a better source but the same trap.** Its rig is a
+    conventional FK chain (`mixamorig:Hips → UpLeg → Leg → Foot`) with the
+    jump's whole vertical lift in `Hips.translation`. This rig has no such
+    chain: the feet are `Root`-space siblings and **`Hips` is animated by
+    zero of the 24 clips** (see the IK-bake table under "Skeleton — bone
+    names"). So a Mixamo clip needs the same hip-remap + synthesised
+    `Foot.L/R` translation tracks that the Quaternius one did. **The
+    difficulty was never the source clip — it is the target rig**, and it is
+    identical for both.
+  - **The one Mixamo play that is actually worth it is not a jump clip.**
+    Re-rig the Farmer mesh through Mixamo's auto-rigger and take the *whole*
+    animation set on the Mixamo skeleton as a new `player.glb`. Then there
+    is no retargeting anywhere, and it also closes the **`Reload` gap that
+    round 3 genuinely has** (see the animation-gap table). Costs: an Adobe
+    login + Blender (Mixamo exports FBX/Collada, never glTF), the repo stops
+    being 100% CC0 (Mixamo is royalty-free but forbids redistributing raw
+    character/animation files as standalone assets — committing the GLB to a
+    public repo is a grey area worth the human's own read), and `bandit.glb`
+    should be swapped with it or the two humanoids stop sharing a rig, which
+    round 4 currently assumes. **BUILD-PLAN.md's appendix explicitly sanctions
+    this as a ~40-minute manual human task** — it is not a rule violation,
+    but it is not a thing Claude can do unattended either.
+  - **Not doable in this environment regardless**: `poly.pizza`,
+    `quaternius.com`, `mixamo.com` and `helpx.adobe.com` are all 403'd by the
+    session's egress proxy (org policy, not a transient failure), and there
+    is no Blender or FBX toolchain installed. Any asset acquisition here is a
+    human-side task.
+  - **Recommendation**: leave `ANIM.airTimeScale` as the jump. If the pose
+    bothers the human in play, the cheap next attempt is a stylised jump
+    authored *in this rig's own idiom* — `Body.translation` + explicit
+    `Foot.L/R` `translation`+`rotation` in `Root` space, optionally sampled
+    from `Roll` (1.33s, 58 channels, the only full-body airborne-ish clip on
+    the correct skeleton, feet included) via `AnimationUtils.subclip` — which
+    needs no second GLB, no licence question and no retarget code at all.
+    Note the earlier procedural leg-tuck attempt almost certainly failed for
+    this exact reason: rotating leg bones without writing `Foot.*`
+    translation produces the boomerang-boot smear, not a tuck. **And if a
+    Mixamo trip happens anyway, do it once, for the whole set, before round
+    3 — not now, for a jump.**
 
 ---
 
@@ -609,9 +697,9 @@ group names. Highlights a later round will specifically reach for:
   further lever if it's somehow still wrong, just double-check the sign.
 - **Removed post-round-1: the real retargeted jump clip, after extensive
   work, never read as right — pulled out entirely rather than shipped
-  broken.** Long history, condensed (full blow-by-blow is in git history on
-  this file and on `src/character.js`/`src/config.js` around this round, and
-  in `src/retarget.js` before it was deleted): round 1 shipped airborne as
+  broken.** Long history, condensed (this summary is the *only* surviving
+  record — the work was never committed, see the correction under "Skeleton —
+  bone names"): round 1 shipped airborne as
   just holding the last locomotion clip at a slowed `timeScale`
   (`ANIM.airTimeScale`). A procedural hand-tuned leg-tuck overlay replaced
   that, then was itself replaced by a genuinely real motion-authored clip
@@ -645,16 +733,57 @@ group names. Highlights a later round will specifically reach for:
     `src/retarget.js` and `models/anim-source-jump.glb` were deleted (their
     only purpose was this feature); `ANIM_SOURCE`/`HIP_FOLLOW`/`KNEE_FOLLOW`/
     `ANIM.jumpTimeScale` were removed from `config.js`.
-  - **If this is ever revisited**: don't restart from scratch. The technique
-    (delta-from-rest retargeting + same-skeleton follower bends for bones
-    whose cross-skeleton retarget distorts + `addVirtualParentTracks` for
-    detached bones like this rig's feet) is sound and well-verified — it's
-    in git history. What was missing wasn't correctness, it was ever
+  - **If this is ever revisited**: the technique (delta-from-rest
+    retargeting + same-skeleton follower bends for bones whose
+    cross-skeleton retarget distorts + `addVirtualParentTracks` for
+    detached bones like this rig's feet) is sound and well-verified — but
+    **it must be rewritten from scratch; it is NOT recoverable from git**
+    (verified — see the correction under "Skeleton — bone names"; an earlier
+    version of this bullet said otherwise and was wrong). What was missing
+    wasn't correctness, it was ever
     actually reading as good motion to a human watching it in real play,
     across several honest tuning attempts. A different source clip, or
     accepting a simpler/more stylized jump pose instead of chasing
     photorealistic motion capture, are both more promising directions than
     another round of retarget-parameter tuning.
+- **Fixed: `node scripts/smoke.mjs` couldn't pass in an egress-restricted
+  session because the page itself was offline-hostile — three.js is now
+  vendored into the repo instead of loaded from a CDN.** `index.html`'s
+  import map used to pull three.js and its addons from `cdn.jsdelivr.net`,
+  and that host (like `poly.pizza`/`quaternius.com`/`mixamo.com`) is 403'd by
+  some sessions' egress proxy — every module import failed, the render loop
+  never started, and every round-1 `__debug` check reported `undefined`.
+  Routing chromium through `HTTPS_PROXY` didn't help, since the proxy itself
+  was what denied the host. **Fix**: `npm pack three@0.160.0` (npm's registry
+  is allow-listed even where jsdelivr isn't) and copied only the four files
+  the codebase actually imports into `vendor/three/` — `build/three.module.js`,
+  `examples/jsm/loaders/GLTFLoader.js`, `examples/jsm/utils/BufferGeometryUtils.js`,
+  and `LICENSE` (MIT). Checked both addon files' own `import` lines first:
+  neither pulls in DRACOLoader, MeshoptDecoder, or any other addon beyond
+  `three` itself and each other, so nothing more needed vendoring.
+  `index.html`'s import map now points `"three"` and `"three/addons/"` at
+  `/vendor/three/...` instead of the CDN. **1.4MB added to the repo** — worth
+  it since this is the actual game dependency, not a dev-only tool.
+  `scripts/smoke.mjs`'s static file server already served anything under
+  `ROOT`, so no server change was needed — only the import map. Re-verified
+  end to end: `node scripts/smoke.mjs` now reports **`smoke PASSED`**, all 8
+  round-1 checks green, fully offline, no CDN reachability required. (Also
+  fixed in the same pass, unrelated but blocking a clean run: `index.html`
+  had no `<link rel="icon">`, so Chromium's automatic `/favicon.ico` request
+  404'd and tripped smoke's "any 4xx" rule — added a trivial inline
+  `data:image/svg+xml` favicon rather than a binary asset file.) **If a
+  future round adds another `three/addons/...` import** (OrbitControls,
+  DRACOLoader, anything), it needs the same treatment: check its own import
+  lines for further addon dependencies, copy the whole chain into
+  `vendor/three/examples/jsm/...` preserving the relative path layout (the
+  addons import each other by relative path, e.g. `../utils/...`), and it'll
+  resolve automatically through the existing `three/addons/` map entry — no
+  `index.html` change needed unless the addon needs something outside
+  `examples/jsm/`.
+  Bumping the three.js version later means re-running the same `npm pack`
+  step and re-copying these same files, not a version-string edit anywhere
+  — there's no `package.json` dependency on three.js, only the vendored copy
+  and the import map pointing at it.
 - **Headless smoke runs slow — this is the test environment, not the game.**
   `scripts/smoke.mjs` measured ~3fps in headless chromium's software rasterizer
   with the full 2048 `PCFSoftShadowMap` on. Real GPUs handle 2048 soft shadows
