@@ -11,6 +11,7 @@
 
 import * as THREE from 'three';
 import { CAMERA, INPUT, PLAYER } from './config.js';
+import { HORSE } from './config-horse.js';
 import { consumeMouseDelta } from './input.js';
 import { colliders } from './collision.js';
 import { heightAt } from './terrain.js';
@@ -38,6 +39,7 @@ export class ThirdPersonCamera {
     this.yaw = 0;
     this.pitch = 0.18;
     this.currentDistance = CAMERA.distance;
+    this.mounted = false; // pulled back and raised while riding — see setMounted()
 
     this._pivot = new THREE.Vector3();
     this._forward = new THREE.Vector3();
@@ -46,6 +48,11 @@ export class ThirdPersonCamera {
     this._desiredPos = new THREE.Vector3();
     this._lookTarget = new THREE.Vector3();
     this._swayTime = 0;
+  }
+
+  /** Called by main.js whenever the player mounts/dismounts. Swaps distance/pivot height only — everything else (collision march, sway, damping) is shared. */
+  setMounted(mounted) {
+    this.mounted = mounted;
   }
 
   /** Reads accumulated mouse movement and applies it to yaw/pitch. Call once per frame before update(). */
@@ -68,28 +75,37 @@ export class ThirdPersonCamera {
     return out;
   }
 
-  /** Furthest the camera can sit from the pivot before it clips terrain or a prop. */
-  _maxUnobstructedDistance(pivot, dirX, dirY, dirZ) {
-    let maxDist = CAMERA.distance;
+  /**
+   * Furthest the camera can sit from the pivot before it clips terrain or a
+   * prop. `ignoreCollider` skips one specific collider — while mounted, the
+   * rider's own pivot sits right on/inside the horse's own circle collider,
+   * so without this every direction sweep immediately "hits" the horse
+   * itself (segmentCircleHit's pivot-already-inside case) and the camera
+   * collapses to CAMERA.minDistance. Confirmed directly via screenshot: the
+   * mounted camera was inside the player's head before this fix.
+   */
+  _maxUnobstructedDistance(pivot, dirX, dirY, dirZ, ignoreCollider) {
+    const baseDistance = this.mounted ? CAMERA.mountedDistance : CAMERA.distance;
+    let maxDist = baseDistance;
 
     // March the analytic heightfield rather than raycasting the rendered mesh
     // (131k triangles with no spatial index — see the note in terrain.js).
     const steps = CAMERA.collisionSteps;
     for (let i = 1; i <= steps; i++) {
-      const t = (i / steps) * CAMERA.distance;
+      const t = (i / steps) * baseDistance;
       const y = pivot.y + dirY * t;
       const groundY = heightAt(pivot.x + dirX * t, pivot.z + dirZ * t);
       if (y <= groundY) {
-        maxDist = ((i - 1) / steps) * CAMERA.distance;
+        maxDist = ((i - 1) / steps) * baseDistance;
         break;
       }
     }
 
     for (const c of colliders) {
-      if (c.type !== 'circle') continue;
+      if (c.type !== 'circle' || c === ignoreCollider) continue;
       const dx = c.x - pivot.x, dz = c.z - pivot.z;
-      if (dx * dx + dz * dz > (CAMERA.distance + c.r) * (CAMERA.distance + c.r)) continue;
-      const hitLen = segmentCircleHit(pivot.x, pivot.z, dirX, dirZ, CAMERA.distance, c.x, c.z, c.r);
+      if (dx * dx + dz * dz > (baseDistance + c.r) * (baseDistance + c.r)) continue;
+      const hitLen = segmentCircleHit(pivot.x, pivot.z, dirX, dirZ, baseDistance, c.x, c.z, c.r);
       if (hitLen < maxDist) maxDist = hitLen;
     }
 
@@ -97,27 +113,29 @@ export class ThirdPersonCamera {
   }
 
   /** Places the camera at its target position immediately, no damping — call once after spawning. */
-  snap(playerPos) {
-    this._pivot.set(playerPos.x, playerPos.y + CAMERA.pivotHeight, playerPos.z);
+  snap(playerPos, ignoreCollider) {
+    const pivotHeight = this.mounted ? CAMERA.mountedPivotHeight : CAMERA.pivotHeight;
+    this._pivot.set(playerPos.x, playerPos.y + pivotHeight, playerPos.z);
     const cosPitch = Math.cos(this.pitch);
     const dirX = Math.sin(this.yaw) * cosPitch;
     const dirY = Math.sin(this.pitch);
     const dirZ = Math.cos(this.yaw) * cosPitch;
-    this.currentDistance = this._maxUnobstructedDistance(this._pivot, dirX, dirY, dirZ);
+    this.currentDistance = this._maxUnobstructedDistance(this._pivot, dirX, dirY, dirZ, ignoreCollider);
     this._camOffset.set(dirX, dirY, dirZ).multiplyScalar(this.currentDistance);
     this.camera.position.copy(this._pivot).add(this._camOffset);
     this.camera.lookAt(this._pivot);
   }
 
-  update(dt, playerPos, speed) {
-    this._pivot.set(playerPos.x, playerPos.y + CAMERA.pivotHeight, playerPos.z);
+  update(dt, playerPos, speed, ignoreCollider) {
+    const pivotHeight = this.mounted ? CAMERA.mountedPivotHeight : CAMERA.pivotHeight;
+    this._pivot.set(playerPos.x, playerPos.y + pivotHeight, playerPos.z);
 
     const cosPitch = Math.cos(this.pitch);
     const dirX = Math.sin(this.yaw) * cosPitch;
     const dirY = Math.sin(this.pitch);
     const dirZ = Math.cos(this.yaw) * cosPitch;
 
-    const targetDistance = this._maxUnobstructedDistance(this._pivot, dirX, dirY, dirZ);
+    const targetDistance = this._maxUnobstructedDistance(this._pivot, dirX, dirY, dirZ, ignoreCollider);
     const zoomSpeed = targetDistance < this.currentDistance ? CAMERA.zoomInSpeed : CAMERA.zoomOutSpeed;
     // three@0.160 has no MathUtils.damp yet — exponential smoothing by hand.
     this.currentDistance += (targetDistance - this.currentDistance) * (1 - Math.exp(-zoomSpeed * dt));
@@ -125,9 +143,11 @@ export class ThirdPersonCamera {
     this._camOffset.set(dirX, dirY, dirZ).multiplyScalar(this.currentDistance);
     this._desiredPos.copy(this._pivot).add(this._camOffset);
 
-    // Subtle handheld sway while moving — stronger at a run, per BUILD-PLAN.md.
-    const movingT = THREE.MathUtils.clamp(speed / PLAYER.sprintSpeed, 0, 1);
-    const swayAmp = THREE.MathUtils.lerp(CAMERA.swayWalk, CAMERA.swayRun, movingT);
+    // Subtle handheld sway while moving — stronger at a run/gallop, per BUILD-PLAN.md.
+    const maxRefSpeed = this.mounted ? HORSE.gallopSpeed : PLAYER.sprintSpeed;
+    const runSway = this.mounted ? CAMERA.mountedSwayRun : CAMERA.swayRun;
+    const movingT = THREE.MathUtils.clamp(speed / maxRefSpeed, 0, 1);
+    const swayAmp = THREE.MathUtils.lerp(CAMERA.swayWalk, runSway, movingT);
     this._swayTime += dt * (speed > 0.1 ? CAMERA.swayFrequency : 0);
     const sway = Math.sin(this._swayTime) * swayAmp * (speed > 0.1 ? 1 : 0);
     this._desiredPos.x += Math.cos(this.yaw) * sway;

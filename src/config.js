@@ -222,6 +222,10 @@ export const PLACEHOLDER = {
   idleBreathFrequency: 1.1,
 };
 
+// --------------------------------------------------------------------- horse ---
+// Split into config-horse.js to keep this file under the 400-line cap — see
+// that file's header. Still "every tunable number", just not in this file.
+
 // ------------------------------------------------------------------- camera ---
 
 export const CAMERA = {
@@ -241,6 +245,13 @@ export const CAMERA = {
   swayRun: 0.032,
   swayFrequency: 5.6,
   swayRollFactor: 0.55,
+  // Pulled back and raised while mounted, per round 2 — same rig, no second
+  // camera. ThirdPersonCamera.setMounted(true) swaps distance/pivotHeight to
+  // these instead of the on-foot ones above; everything else (collision
+  // march, sway, damping) is shared.
+  mountedDistance: 7.6,
+  mountedPivotHeight: 2.0,
+  mountedSwayRun: 0.045, // galloping sways harder than sprinting on foot
 };
 
 export const INPUT = {

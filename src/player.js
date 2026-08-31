@@ -48,6 +48,7 @@ export class Player {
     this.meshYaw = SPAWN.yaw;
     this.animState = 'idle';
     this.boundaryProximity = 0; // 0..1, for the UI edge-of-map fade
+    this.mounted = false; // true while riding the horse — see mount()/dismount() and horse.js
 
     this._coyoteTimer = 0;
     this._jumpBufferTimer = 0;
@@ -61,7 +62,38 @@ export class Player {
     character.root.rotation.y = this.meshYaw + PLAYER.meshYawOffset;
   }
 
+  /** Called by horse.js when a mount succeeds. Physics stop; main.js now drives this.position/meshYaw from the saddle transform each frame. */
+  mount() {
+    this.velocityXZ.set(0, 0, 0);
+    this.velocityY = 0;
+    this.grounded = true;
+    this.mounted = true;
+  }
+
+  /** Called by horse.js on dismount, with a ground-level drop-off point already resolved. */
+  dismount(x, y, z, yaw) {
+    this.mounted = false;
+    this.position.set(x, y, z);
+    this.meshYaw = yaw;
+    this.velocityXZ.set(0, 0, 0);
+    this.velocityY = 0;
+    this.grounded = true;
+  }
+
   update(dt, camera) {
+    if (this.mounted) {
+      // Position/meshYaw are already set by main.js from horse.getSaddleTransform()
+      // this frame — this just keeps the visual rig and a resting animation in sync.
+      this.speed = 0;
+      this.boundaryProximity = 0;
+      this.character.setLocomotion('idle', 0);
+      this.character.setAirborne(false);
+      this.character.update(dt);
+      this.character.root.position.copy(this.position);
+      this.character.root.rotation.y = this.meshYaw + PLAYER.meshYawOffset;
+      return;
+    }
+
     const inputActive = isPointerLocked();
 
     // ------------------------------------------------------------- input ---
