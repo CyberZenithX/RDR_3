@@ -30,7 +30,8 @@ One line per file. Read only what the round needs.
 
 | File | What's in it |
 |---|---|
-| `index.html` | Import map + overlay markup (loading screen, click-to-play, boundary-warning vignette) + CSS. Boots `/src/main.js` as a module. No inline game code anymore. |
+| `index.html` | Import map (points `three`/`three/addons/` at `/vendor/three/`, not a CDN — see "Known rough edges") + overlay markup (loading screen, click-to-play, boundary-warning vignette) + CSS + a data-URI favicon. Boots `/src/main.js` as a module. No inline game code anymore. |
+| `vendor/three/` | three.js **0.160.0**, vendored from the npm package (not a submodule, not `node_modules` — committed files). Only what the codebase imports: `build/three.module.js`, `examples/jsm/loaders/GLTFLoader.js`, `examples/jsm/utils/BufferGeometryUtils.js`, `LICENSE`. See "Known rough edges" for why (CDN-loaded three.js made `scripts/smoke.mjs` unrunnable in egress-restricted sessions) and how to extend it if a later round imports another addon. |
 | `BUILD-PLAN.md` | The spec. Read every round. |
 | `CLAUDE.md` | This file. |
 | `SMOKE-TEST.md` | Manual checklist for the human. Grow it every round, never delete a line. |
@@ -745,21 +746,44 @@ group names. Highlights a later round will specifically reach for:
     accepting a simpler/more stylized jump pose instead of chasing
     photorealistic motion capture, are both more promising directions than
     another round of retarget-parameter tuning.
-- **`node scripts/smoke.mjs` cannot fully pass in an egress-restricted session
-  — the page itself is offline-hostile.** `index.html`'s import map pulls
-  three.js and its addons from `cdn.jsdelivr.net`, and that host (like
-  `poly.pizza`/`quaternius.com`/`mixamo.com`) is 403'd by some sessions' egress
-  proxy, so every module import fails, the render loop never starts, and all
-  the round-1 `__debug` checks report `undefined`. The browser launch itself is
-  fine — `launchChromium()` handles the mismatched-build case (see the file map)
-  and was verified starting `/opt/pw-browsers/chromium` and loading the local
-  server. **Don't chase the `undefined` checks as a game bug**; check whether
-  `curl https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js`
-  succeeds first. Routing chromium through `HTTPS_PROXY` does not help when the
-  proxy is what's denying the host. The real fix, if offline smoke runs ever
-  matter, is vendoring three.js into the repo and pointing the import map at
-  the local copy — a deliberate change to the project's CDN/no-build setup, so
-  raise it before doing it.
+- **Fixed: `node scripts/smoke.mjs` couldn't pass in an egress-restricted
+  session because the page itself was offline-hostile — three.js is now
+  vendored into the repo instead of loaded from a CDN.** `index.html`'s
+  import map used to pull three.js and its addons from `cdn.jsdelivr.net`,
+  and that host (like `poly.pizza`/`quaternius.com`/`mixamo.com`) is 403'd by
+  some sessions' egress proxy — every module import failed, the render loop
+  never started, and every round-1 `__debug` check reported `undefined`.
+  Routing chromium through `HTTPS_PROXY` didn't help, since the proxy itself
+  was what denied the host. **Fix**: `npm pack three@0.160.0` (npm's registry
+  is allow-listed even where jsdelivr isn't) and copied only the four files
+  the codebase actually imports into `vendor/three/` — `build/three.module.js`,
+  `examples/jsm/loaders/GLTFLoader.js`, `examples/jsm/utils/BufferGeometryUtils.js`,
+  and `LICENSE` (MIT). Checked both addon files' own `import` lines first:
+  neither pulls in DRACOLoader, MeshoptDecoder, or any other addon beyond
+  `three` itself and each other, so nothing more needed vendoring.
+  `index.html`'s import map now points `"three"` and `"three/addons/"` at
+  `/vendor/three/...` instead of the CDN. **1.4MB added to the repo** — worth
+  it since this is the actual game dependency, not a dev-only tool.
+  `scripts/smoke.mjs`'s static file server already served anything under
+  `ROOT`, so no server change was needed — only the import map. Re-verified
+  end to end: `node scripts/smoke.mjs` now reports **`smoke PASSED`**, all 8
+  round-1 checks green, fully offline, no CDN reachability required. (Also
+  fixed in the same pass, unrelated but blocking a clean run: `index.html`
+  had no `<link rel="icon">`, so Chromium's automatic `/favicon.ico` request
+  404'd and tripped smoke's "any 4xx" rule — added a trivial inline
+  `data:image/svg+xml` favicon rather than a binary asset file.) **If a
+  future round adds another `three/addons/...` import** (OrbitControls,
+  DRACOLoader, anything), it needs the same treatment: check its own import
+  lines for further addon dependencies, copy the whole chain into
+  `vendor/three/examples/jsm/...` preserving the relative path layout (the
+  addons import each other by relative path, e.g. `../utils/...`), and it'll
+  resolve automatically through the existing `three/addons/` map entry — no
+  `index.html` change needed unless the addon needs something outside
+  `examples/jsm/`.
+  Bumping the three.js version later means re-running the same `npm pack`
+  step and re-copying these same files, not a version-string edit anywhere
+  — there's no `package.json` dependency on three.js, only the vendored copy
+  and the import map pointing at it.
 - **Headless smoke runs slow — this is the test environment, not the game.**
   `scripts/smoke.mjs` measured ~3fps in headless chromium's software rasterizer
   with the full 2048 `PCFSoftShadowMap` on. Real GPUs handle 2048 soft shadows
