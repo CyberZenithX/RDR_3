@@ -4,7 +4,7 @@
  * forward over the withers on the reins.
  *
  * There is no seated clip on this rig — player.glb ships 24 clips and every
- * one of them is standing or combat (see CLAUDE.md's inventory), so a riding
+ * one of them is standing or combat (see docs/ANIMATION.md), so a riding
  * pose has to be built by hand. It is applied *after* `mixer.update()` each
  * frame, which is the whole trick: the idle clip keeps playing underneath and
  * we overwrite the bones it just wrote.
@@ -18,7 +18,7 @@
  * `apply()`'s weight-0 branch.
  *
  * Two properties of this skeleton drive the implementation, both measured off
- * the live rig rather than assumed (see CLAUDE.md's "Skeleton — bone names"):
+ * the live rig rather than assumed (see docs/ANIMATION.md's rig section):
  *
  *  1. Bone rest orientations are baked-IK arbitrary — `UpperLegL`'s local
  *     quaternion is nowhere near identity — so "rotate the thigh forward" is
@@ -84,7 +84,7 @@ export class RidingPose {
     this.root = root;
     this.bones = {};
     // GLTFLoader strips dots from node names ('Wrist.R' -> 'WristR'), so these
-    // are the runtime forms, not the source-file forms. See CLAUDE.md.
+    // are the runtime forms, not the source-file forms. See docs/ANIMATION.md.
     for (const name of BONE_NAMES) this.bones[name] = root.getObjectByName(name) ?? null;
     for (const name of GRIP_BONES) this.bones[name] = root.getObjectByName(name) ?? null;
     for (const side of ['L', 'R']) this.bones[`Wrist${side}`] = root.getObjectByName(`Wrist${side}`) ?? null;
@@ -311,8 +311,12 @@ export class RidingPose {
    * @param {number} sway -1..1 — the horse's current gait bob, so the rein
    *   hands and torso move in phase with the stride rather than on a guessed
    *   sine of their own.
+   * @param {number} jump 0..1 — how far into the two-point (jumping) seat the
+   *   rider is: forward at the hip, knee closed, hands pushed up the neck. The
+   *   vertical half of coming up out of the saddle is not an angle at all —
+   *   it is HORSE.jumpSeatRise, applied to the seat itself in horse-seat.js.
    */
-  apply(weight, sway = 0) {
+  apply(weight, sway = 0, jump = 0) {
     if (!this.available || !this._captured) return;
     if (weight <= 0.0001) {
       // Releasing the pose has to put the un-animated bones back by hand. The
@@ -331,6 +335,7 @@ export class RidingPose {
     const p = RIDING_POSE;
     const w = Math.min(1, weight);
     const s = sway * w;
+    const j = THREE.MathUtils.clamp(jump, 0, 1) * w;
 
     // Back to rest first — see `_rest`'s comment for why a bare delta is not
     // safe here — then every angle below is measured from that known pose.
@@ -347,13 +352,13 @@ export class RidingPose {
     // to be settled before the arm rotations are converted into local space.
     // The spine points *up*, so a positive X rotation carries it forward —
     // the opposite sense to the limbs below, which hang down.
-    this._rotate(this.bones.Torso, (p.torsoPitch + p.swayTorso * s) * w, 0, 0);
-    this._rotate(this.bones.Head, p.headPitch * w, 0, 0);
+    this._rotate(this.bones.Torso, (p.torsoPitch + p.swayTorso * s + p.jumpTorsoPitch * j) * w, 0, 0);
+    this._rotate(this.bones.Head, (p.headPitch + p.jumpHeadPitch * j) * w, 0, 0);
     this.root.updateMatrixWorld(true);
 
     // Thighs: forward to sit astride (-X is forward for a hanging limb), and
     // outward around the barrel — mirrored in Z between the two sides.
-    const thighPitch = -(p.thighPitch + p.swayThigh * s) * w;
+    const thighPitch = -(p.thighPitch + p.swayThigh * s + p.jumpThighPitch * j) * w;
     const spread = p.thighSpread * w;
     this._rotate(this.bones.UpperLegL, thighPitch, 0, spread);
     // The right leg carries a trim: this rig's legs are not mirror images of
@@ -361,16 +366,17 @@ export class RidingPose {
     this._rotate(this.bones.UpperLegR, thighPitch - p.rightPitchTrim * w, 0, -(spread + p.rightSpreadTrim * w));
 
     // Upper arms: forward toward the reins, tucked in toward the centreline.
-    const armPitch = -p.armPitch * w;
+    const armPitch = -(p.armPitch + p.jumpArmPitch * j) * w;
     const armIn = p.armIn * w;
     this._rotate(this.bones.UpperArmL, armPitch, 0, -armIn);
     this._rotate(this.bones.UpperArmR, armPitch, 0, armIn);
     this.root.updateMatrixWorld(true);
 
     // Knees fold the shin back down, elbows carry the hands forward to the reins.
-    this._rotate(this.bones.LowerLegL, p.kneeBend * w, 0, 0);
-    this._rotate(this.bones.LowerLegR, (p.kneeBend + p.rightKneeTrim) * w, 0, 0);
-    const elbow = -(p.elbowBend + p.swayElbow * s) * w;
+    const knee = p.kneeBend + p.jumpKneeBend * j;
+    this._rotate(this.bones.LowerLegL, knee * w, 0, 0);
+    this._rotate(this.bones.LowerLegR, (knee + p.rightKneeTrim) * w, 0, 0);
+    const elbow = -(p.elbowBend + p.swayElbow * s + p.jumpElbowBend * j) * w;
     this._rotate(this.bones.LowerArmL, elbow, 0, 0);
     this._rotate(this.bones.LowerArmR, elbow, 0, 0);
     this.root.updateMatrixWorld(true);

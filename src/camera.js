@@ -48,6 +48,24 @@ export class ThirdPersonCamera {
     this._desiredPos = new THREE.Vector3();
     this._lookTarget = new THREE.Vector3();
     this._swayTime = 0;
+    this._pivotY = null; // damped; null until the first snap()/update() seeds it
+  }
+
+  /**
+   * The pivot's height, chased rather than copied straight from the player.
+   * A horse jump moves the rider 1.5m vertically in under a second, and a
+   * pivot welded to that drags the whole world down with it; lagging slightly
+   * reads as the camera being left behind, which is what a jump should feel
+   * like. Terrain undulation is far slower than `pivotFollowRate` and is
+   * followed essentially exactly, so on-foot framing is unchanged.
+   */
+  _followPivotY(targetY, dt) {
+    if (this._pivotY === null || Math.abs(targetY - this._pivotY) > CAMERA.pivotSnapDistance) {
+      this._pivotY = targetY; // first frame, or a teleport — not motion to smooth
+    } else {
+      this._pivotY += (targetY - this._pivotY) * (1 - Math.exp(-CAMERA.pivotFollowRate * dt));
+    }
+    return this._pivotY;
   }
 
   /** Called by main.js whenever the player mounts/dismounts. Swaps distance/pivot height only — everything else (collision march, sway, damping) is shared. */
@@ -115,7 +133,8 @@ export class ThirdPersonCamera {
   /** Places the camera at its target position immediately, no damping — call once after spawning. */
   snap(playerPos, ignoreCollider) {
     const pivotHeight = this.mounted ? CAMERA.mountedPivotHeight : CAMERA.pivotHeight;
-    this._pivot.set(playerPos.x, playerPos.y + pivotHeight, playerPos.z);
+    this._pivotY = playerPos.y + pivotHeight;
+    this._pivot.set(playerPos.x, this._pivotY, playerPos.z);
     const cosPitch = Math.cos(this.pitch);
     const dirX = Math.sin(this.yaw) * cosPitch;
     const dirY = Math.sin(this.pitch);
@@ -128,7 +147,7 @@ export class ThirdPersonCamera {
 
   update(dt, playerPos, speed, ignoreCollider) {
     const pivotHeight = this.mounted ? CAMERA.mountedPivotHeight : CAMERA.pivotHeight;
-    this._pivot.set(playerPos.x, playerPos.y + pivotHeight, playerPos.z);
+    this._pivot.set(playerPos.x, this._followPivotY(playerPos.y + pivotHeight, dt), playerPos.z);
 
     const cosPitch = Math.cos(this.pitch);
     const dirX = Math.sin(this.yaw) * cosPitch;

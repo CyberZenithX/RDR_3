@@ -17,6 +17,10 @@ loading need `http://`.
 Lines are added every round and never deleted. If something here breaks, say so —
 fixing it comes before any new feature.
 
+Claude's side of this: everything machine-checkable lives in `scripts/smoke.mjs`
+(see `docs/TESTING.md`), and the project's technical memory lives in `CLAUDE.md`
+plus `docs/`.
+
 ---
 
 ## Round 0 — assets
@@ -213,3 +217,147 @@ the extra things to look at.
 6. **No flicker.** The straps are one continuously rewritten mesh; if they
    vanish at certain camera angles or distances that is a culling problem,
    not a placement one.
+
+## Round 2c — the rider stays seated through a turn
+
+Added after round 2b, when the rider turned out to slide off the saddle and
+throw a leg into the air the moment the horse banked into a turn. The seat now
+banks with the horse and the rider's lean pivots at the seat rather than at
+their own feet. Things to look at, all of them *while turning*, which is the
+state none of the round-2b checks covered:
+
+1. **Hold a hard turn.** Ride at a walk and hold `A` or `D` for several
+   seconds so the horse settles into a steady bank. The rider should stay
+   centred on the horse's back the whole time, with both boots hanging down
+   either side of the barrel. This is the exact thing that was broken: one leg
+   used to swing out horizontally into the air while the rider slid toward the
+   other side.
+2. **Watch the seat, not just the legs.** The rider's hips should stay planted
+   on the back and bank *with* it. If they appear to hover to one side of the
+   spine, or to sink into the barrel on the inside of the turn, the saddle
+   point is not tracking the horse's bank.
+3. **Turn both ways, and reverse mid-turn.** Swing hard left, then hard right
+   without stopping. The rider should follow through the crossover without a
+   pop or a lurch as the lean passes through zero.
+4. **Turn at a gallop.** Forward carriage (`riderGallopPitch`) and the bank
+   compose here, and a gallop banks harder because the horse turns faster.
+   The rider should end up leaning forward *and* into the turn, still seated.
+5. **Turn while mounting.** Whistle the horse, mount while it is still moving,
+   and turn immediately. The hip offset is scaled by the mount blend, so this
+   is the one moment the two can disagree — the rider should still arrive in
+   the saddle cleanly, with no dip through the horse or the ground.
+6. **The reins survive it.** They are rebuilt from live bones, so they should
+   follow the hands around the turn without stretching or detaching.
+7. **The camera behaves.** The mounted camera pivot now moves with the banking
+   rider, so a hard turn swings it slightly. It should read as the camera
+   following the horse, not as a lurch — if it feels seasick,
+   `CAMERA.mountedPivotHeight` is the lever.
+
+## Round 2d — the horse jump
+
+Controls: **Space** now jumps the *horse* while mounted (it still jumps the
+player on foot). The horse must already be moving — at least a walk — and must
+have stamina left; a jump costs a little of it.
+
+1. **It jumps.** Ride forward at any pace and press Space. The horse should
+   leave the ground in a real arc, hang for about nine tenths of a second, and
+   land cleanly back on the terrain. Try it at a walk, at a trot-equivalent
+   pace and at a full gallop — the arc is the same height each time, but a
+   gallop carries you much further across the ground.
+2. **The legs are a real animation, not a pose.** `horse.glb` ships a genuine
+   `Gallop_Jump` clip, so the forelegs should fold up on the rise and reach out
+   again on the descent. It is stretched to fit the flight, so it should finish
+   roughly as the hooves touch down rather than ending early and freezing.
+3. **The horse pitches.** Nose up on the way up, nose down over the descent,
+   eased rather than snapped. If it ever tips *sideways* instead of nose-up,
+   the mesh Euler order has regressed (it must be `YXZ`).
+4. **The rider comes up out of the saddle.** Mid-flight they should be in a
+   two-point seat — lifted off the saddle, folded forward at the hip over the
+   withers, knees closed, hands pushed up the neck — and settle back down into
+   the normal seat on landing. They should never be left sitting bolt upright
+   as if nothing happened, and never be left behind over the horse's rump.
+5. **Jump over an actual rock.** This is the point of the round. Find a rock
+   roughly chest-high on the horse or smaller, gallop straight at it, and jump
+   as you reach it — you should sail over instead of being stopped.
+   - **Big boulders are meant to stop you.** Rocks run from about 0.6m to 3.6m
+     tall and the horse's belly clears about 2.7m at the top of its arc, so a
+     bit over half of them are jumpable and the largest are genuine obstacles
+     you have to ride around. If that balance feels wrong in play,
+     `HORSE.jumpSpeed` in `config-horse.js` is the single lever.
+   - **Cacti and dead trees are never jumpable** (they are 3-6m tall). If the
+     horse ever passes through one, that is a real bug.
+6. **You cannot cheat the clearance.** Walk or gallop the horse straight into a
+   small rock *without* jumping — it must still stop you dead. The horse only
+   passes over things while genuinely in the air.
+7. **Land on a slope.** Jump uphill and downhill. The landing should snap onto
+   the terrain without the horse sinking into it, hanging above it, or
+   bouncing.
+8. **The camera does not get seasick.** It follows the arc with a slight lag
+   rather than rigidly. If it feels like the world is being yanked up and down,
+   `CAMERA.pivotFollowRate` in `config.js` is the lever; if it feels detached
+   and floaty, raise it.
+9. **Spam it.** Hold Space, mash it, press it mid-air, press it the instant you
+   land. You should never double-jump, never get stuck airborne, and never
+   pogo on the spot from a standstill (a jump needs forward motion).
+10. **Stamina interacts sensibly.** Gallop until the stamina bar is exhausted:
+    the horse should refuse to jump as well as refuse to gallop, and both
+    should come back together as it recovers.
+11. **E does nothing mid-air.** Pressing dismount while the horse is airborne
+    should be ignored, not drop the rider through the arc onto the ground.
+12. **Space still jumps you on foot.** Dismount and press Space — the player's
+    own jump should work exactly as it did in round 1. In particular, holding
+    Space while riding and *then* dismounting should not fire a stored jump the
+    moment your boots hit the ground.
+13. No console errors through a mount → gallop → jump → land → turn → jump →
+    dismount cycle, repeated a few times.
+
+## Round 2d (cont.) — the rider at the top of the jump
+
+Added after a play session found the rider merging into the horse at the apex.
+Root cause and measurements:
+[`docs/HORSE.md`](docs/HORSE.md#the-rider-was-swallowed-by-the-horse-at-the-apex).
+
+1. **The rider stays on top of the horse for the whole arc.** Jump and watch
+   the peak specifically — this was invisible on the way up and on the way
+   down, and only went wrong for the few frames around the top. Rider and horse
+   should never intersect: no torso sinking into the back, no hat disappearing
+   into the withers, no boot passing through the barrel.
+2. **Watch it from behind and from the side.** From directly behind, the fault
+   read as the rider simply vanishing. From the side it read as the horse's
+   back rising through them. Both angles are worth one jump each.
+3. **The horse's own body rises a long way over a jump, and nobody has judged
+   whether that looks right.** `Gallop_Jump` lifts the horse's back about 0.75m
+   *on top of* the 1.70m arc the game integrates, so the animal reaches higher
+   than `HORSE.jumpSpeed` alone suggests. It is meant to look like a real
+   jumping effort — but if it reads as the horse ballooning or as two separate
+   motions stacked, say so, because the alternative (cancelling the clip's own
+   rise instead of letting the rider follow it) is a design change, not a
+   tuning one.
+4. **The rider should still look like they are riding it, not glued to it.**
+   Now that the seat follows the back outright while airborne
+   (`HORSE.jumpSaddleFollow` = 1, against 0.72 on the ground), the rider takes
+   all of the horse's vertical motion in the air. If that reads as stiff, the
+   lever is that constant — but lowering it is what caused the original bug, so
+   it cannot go far.
+5. **The seat now inherits the horse's jump pitch.** Over the arc the rider
+   should stay square on the back as the horse tips nose-up and then nose-down,
+   rather than sliding up the neck at the top and toward the rump on the way
+   down.
+
+## Stamina — the tank was resized
+
+`HORSE.staminaMax` went from 1 to 1.5 on the human's call.
+
+1. **A gallop should last about 6.8s from full**, up from 4.55s, and a full
+   refill about 11.5s, up from 7.7s. Ride it and say whether that is the right
+   trade — a bigger tank also takes proportionally longer to fill.
+2. **The stamina bar must still fill the whole width and no more.** It is now
+   fed a fraction rather than the raw value; if it ever renders past the end of
+   its track, or stops short of full when the horse is rested, that path has
+   regressed.
+3. **The exhaustion lockout was deliberately not scaled.** After bottoming out,
+   the horse should still refuse to gallop for about the same ~1.7s it always
+   did before letting you back in — not proportionally longer.
+4. **Jumping costs proportionally less of the bar now** (`jumpStaminaCost` is
+   absolute and the tank got bigger). If jump-spamming feels too cheap, that
+   constant is the lever.

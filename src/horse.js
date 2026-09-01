@@ -16,6 +16,11 @@
  * onto the Player instance; player.js's own on-foot physics do not run
  * while `player.mounted` is true (see its update()).
  *
+ * Two neighbours own the rest of the animal, both split out under
+ * BUILD-PLAN.md's 400-line cap: horse-jump.js owns the vertical axis (gravity,
+ * the arc, what an obstacle has to be under to pass beneath) and horse-seat.js
+ * owns where the rider sits and how the body under them moves.
+ *
  * No vectors are allocated inside update() — everything reusable is an
  * instance scratch object, per the performance budget rule.
  */
@@ -25,7 +30,8 @@ import { TOWN, BOUNDARY, SPAWN } from './config.js';
 import { HORSE, HORSE_ANIM } from './config-horse.js';
 import { isKeyDown, isPointerLocked } from './input.js';
 import { addCircleCollider, resolveCollisions } from './collision.js';
-import { smoothstep } from './noise.js';
+import { HorseJump } from './horse-jump.js';
+import { HorseSeat } from './horse-seat.js';
 
 function lerpAngle(a, b, t) {
   let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
@@ -83,58 +89,30 @@ export class Horse {
     this._moveDir = new THREE.Vector3();
     this._desiredVel = new THREE.Vector3();
     this._diff = new THREE.Vector3();
-    this._saddlePos = new THREE.Vector3();
-    this._saddleLocal = new THREE.Vector3();
-    this._boneWorld = new THREE.Vector3();
-    this._up = new THREE.Vector3(0, 1, 0);
 
-    // The rider rides the horse's own spine bone, not a fixed height: the back
-    // travels 0.15 through a gallop cycle and sits at a different average
-    // height per gait, so any constant offset floats at one gait and sinks at
-    // another (measured — see config-horse.js's saddleBone comment). Absent on
-    // the procedural fallback horse, which has no skeleton; `saddleBob` then
-    // stays 0 and the fixed offset alone applies.
-    this._saddleBone = character.root.getObjectByName(HORSE.saddleBone) ?? null;
-    this._saddleBoneRestY = 0;
-    this.saddleBob = 0; // metres the seat is currently above/below its rest height
-    this.saddleSway = 0; // the same, normalised to -1..1 for animation to key off
     this.riderPitch = 0; // radians the rider leans forward, eased in with speed
+    this.jump = new HorseJump(this); // owns position.y — see horse-jump.js
+    this.seat = new HorseSeat(this); // owns where the rider sits — see horse-seat.js
 
     character.root.position.copy(this.position);
     character.root.rotation.y = this.yaw + HORSE.meshYawOffset;
-
-    // Rest height of the saddle bone, measured against the mesh root rather
-    // than the horse's logical position — the two are equal in play, but the
-    // root must already be placed for the reading to mean anything.
-    if (this._saddleBone) {
-      character.root.updateMatrixWorld(true);
-      this._saddleBoneRestY = this._boneHeightAboveRoot();
-    }
-  }
-
-  /** Saddle bone's height above the horse mesh's own root, in world units. */
-  _boneHeightAboveRoot() {
-    this._saddleBone.getWorldPosition(this._boneWorld);
-    return this._boneWorld.y - this.character.root.position.y;
+    // 'YXZ' so the bank is taken about the horse's own longitudinal axis and
+    // the jump pitch about its own lateral one, whichever way it is facing.
+    // Under the default 'XYZ' the pitch would be a world-X rotation, which
+    // tips a horse travelling east sideways instead of nose-up.
+    character.root.rotation.order = 'YXZ';
+    this.seat.captureRest();
   }
 
   /**
-   * Reads how far the horse's back has risen or fallen this frame. Called after
-   * the horse's own mixer has advanced and its transform is written, so the
-   * value is exactly in phase with the gait actually on screen — no guessed
-   * sine wave, and it stays in phase automatically when the clip's timeScale
-   * changes with speed.
+   * Stamina as a 0..1 fraction of the tank, which is what the UI bar wants.
+   * `ui.js` is deliberately generic and knows nothing about horses, so the
+   * normalisation belongs here with the number it normalises against rather
+   * than as a hardcoded assumption that `HORSE.staminaMax` is 1 — which it is
+   * not, and which is exactly what broke when the tank was resized.
    */
-  _sampleSaddleBob() {
-    if (!this._saddleBone) {
-      this.saddleBob = 0;
-      this.saddleSway = 0;
-      return;
-    }
-    this.character.root.updateMatrixWorld(true);
-    const raw = this._boneHeightAboveRoot() - this._saddleBoneRestY;
-    this.saddleBob = THREE.MathUtils.clamp(raw * HORSE.saddleFollow, -HORSE.saddleBobLimit, HORSE.saddleBobLimit);
-    this.saddleSway = THREE.MathUtils.clamp(raw / HORSE.saddleBobLimit, -1, 1);
+  get staminaFraction() {
+    return HORSE.staminaMax > 0 ? this.stamina / HORSE.staminaMax : 0;
   }
 
   /** Called on an H-key press (edge-detected here, not by the caller). */
@@ -167,30 +145,40 @@ export class Horse {
 
     this._updateStamina(dt);
 
-    resolveCollisions(this.position, HORSE.colliderRadius, this.collider);
+    // Anything whose top is under the horse's belly is skipped while it is in
+    // the air — that, plus the `top` props now record, is the whole of "the
+    // horse can jump over it". On the ground the clearance is -Infinity and
+    // the collision list is honoured in full, exactly as before.
+    resolveCollisions(this.position, HORSE.colliderRadius, this.collider, this.jump.clearance());
     const distFromCenter = Math.hypot(this.position.x - TOWN.centerX, this.position.z - TOWN.centerZ);
     if (distFromCenter > BOUNDARY.playerLimit) {
       const scale = BOUNDARY.playerLimit / distFromCenter;
       this.position.x = TOWN.centerX + (this.position.x - TOWN.centerX) * scale;
       this.position.z = TOWN.centerZ + (this.position.z - TOWN.centerZ) * scale;
     }
-    this.position.y = this.world.groundHeightAt(this.position.x, this.position.z);
+    // Vertical last, against the terrain under wherever the horse ended up.
+    this.jump.update(dt, this.world.groundHeightAt(this.position.x, this.position.z));
     this.collider.x = this.position.x;
     this.collider.z = this.position.z;
 
     if (this._mountBlendT < HORSE.mountLerpTime) this._mountBlendT += dt;
 
+    // While airborne the one-shot jump clip owns the rig and setLocomotion
+    // stands aside; animState still tracks the gait underneath so the landing
+    // fades straight back into it.
     this.animState = classifyHorseSpeed(this.speed, this.animState);
+    this.character.setAirborne(this.jump.airborne, this.jump.airTime);
     this.character.setLocomotion(this.animState, this.speed);
     this.character.update(dt);
 
     this.character.root.position.copy(this.position);
     this.character.root.rotation.y = this.yaw + HORSE.meshYawOffset;
+    this.character.root.rotation.x = this.jump.pitch; // order is 'YXZ' — see the constructor
     this.character.root.rotation.z = this.lean;
 
     // After the transform above, so the bone sample reflects this frame's pose
     // rather than last frame's.
-    this._sampleSaddleBob();
+    this.seat.sample(this.jump.airborne);
 
     // How far forward the rider carries themselves — eased rather than snapped,
     // so breaking into a gallop leans them in over a few frames.
@@ -313,22 +301,36 @@ export class Horse {
    * Mount if unmounted and in range, dismount if mounted. Public (not an
    * underscore-prefixed internal) because it's also the hook smoke.mjs uses
    * to exercise mounting without simulating real pointer-locked input — see
-   * CLAUDE.md's round 2 notes and the "mount attaches..." check there.
+   * docs/TESTING.md and the "mount attaches..." check in smoke.mjs.
    */
   handleMountToggle(player) {
     if (this.mounted) {
+      // Stepping off mid-jump would drop the rider through the arc onto the
+      // ground the instant they let go. Ignore it; they land in a moment.
+      if (this.jump.airborne) return;
       this._dismount(player);
     } else if (this._distanceTo(player.position) <= HORSE.mountRange) {
       this._premountPos.copy(player.position);
       this._premountYaw = player.meshYaw;
       this._mountBlendT = 0;
       this.mounted = true;
+      this.jump.reset(); // Space is the player's own jump on foot — don't inherit a stale press
       player.mount();
     }
   }
 
+  /**
+   * Jump. Public for the same reason handleMountToggle is: scripts/smoke.mjs
+   * needs to exercise it without the trusted pointer-locked keypress headless
+   * chromium cannot produce. In real play horse-jump.js reads Space itself.
+   */
+  handleJump() {
+    this.jump.request();
+  }
+
   _dismount(player) {
     this.mounted = false;
+    this.jump.reset();
     const sideX = Math.cos(this.yaw + Math.PI / 2);
     const sideZ = Math.sin(this.yaw + Math.PI / 2);
     const x = this.position.x + sideX * HORSE.dismountDistance;
@@ -338,35 +340,12 @@ export class Horse {
   }
 
   /**
-   * Everything the rider needs to sit on this horse this frame: where their
-   * hips go, which way they face, and how the body underneath them is moving.
-   * During the post-mount blend window position and yaw ease from wherever the
-   * player stood at mount time onto the true saddle point, per BUILD-PLAN.md's
-   * "lerp onto the saddle point over 0.4s, no clip" fake for Mount/Dismount —
-   * and `blend` hands that same 0..1 curve to the seated pose so the rider
-   * folds into the saddle over the ride up instead of snapping into it.
-   *
-   * `position.y` is the seat height (where the rider's *hips* belong), not
-   * ground level — player.js drops the rig's own measured hip height off it.
+   * Everything the rider needs to sit on this horse this frame — position,
+   * facing, mount blend, bank, pitch, gait sway and jump weight. The whole
+   * computation lives in horse-seat.js; this stays here as the public entry
+   * point main.js and scripts/smoke.mjs already call.
    */
   getSaddleTransform(outPos) {
-    this._saddleLocal.set(HORSE.saddleOffset.x, 0, HORSE.saddleOffset.z).applyAxisAngle(this._up, this.yaw);
-    this._saddlePos.set(
-      this.position.x + this._saddleLocal.x,
-      this.position.y + HORSE.saddleOffset.y + this.saddleBob,
-      this.position.z + this._saddleLocal.z,
-    );
-
-    const t = smoothstep(0, HORSE.mountLerpTime, this._mountBlendT);
-    outPos.lerpVectors(this._premountPos, this._saddlePos, t);
-    const yaw = lerpAngle(this._premountYaw, this.yaw, t);
-    return {
-      position: outPos,
-      yaw,
-      blend: t,
-      roll: this.lean * HORSE.riderLean * t,
-      pitch: this.riderPitch * t,
-      sway: this.saddleSway * HORSE.riderBobSway,
-    };
+    return this.seat.transform(outPos);
   }
 }

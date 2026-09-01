@@ -114,7 +114,7 @@ await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'load', timeout: 30000
 // The render loop must actually start and keep going. Timeout is generous
 // (45s) because headless chromium's software rasterizer renders a 2048
 // PCFSoftShadowMap far slower than any real GPU does — measured ~3fps here
-// vs. 60fps target on real hardware. See CLAUDE.md "known rough edges".
+// vs. 60fps target on real hardware. See docs/TESTING.md.
 try {
   await page.waitForFunction((n) => window.__frames > n, FRAME_TARGET, { timeout: 45000 });
 } catch {
@@ -248,7 +248,7 @@ const CHECKS = [
   ['mount attaches the player to the horse\'s saddle', async () => {
     // Exercises mounting via the public Horse.handleMountToggle(player) hook
     // (see its own doc comment in horse.js) instead of simulating real
-    // pointer-locked keyboard input, per CLAUDE.md's round 2 plan.
+    // pointer-locked keyboard input, per docs/TESTING.md.
     const before = await page.evaluate(() => {
       const d = window.__debug;
       const h = d.horse;
@@ -381,6 +381,97 @@ const CHECKS = [
     const drift = Math.max(...first.map((v, i) => Math.abs(v - second[i])));
     return drift < 0.02 ? null : `Torso rotation drifted by ${drift.toFixed(3)} over 12 frames of riding — the pose is compounding, not idempotent`;
   }],
+  ['rider stays seated in the saddle while the horse banks into a turn', async () => {
+    // The round-2b pose is stable, but the rigid placement around it was not:
+    // the seat was built straight up from the horse's *ground-level* origin
+    // while the mesh banks about that origin, and the rider's roll pivoted at
+    // the rig root a whole hip height below the seat. Both errors only appear
+    // once `lean` is non-zero, so this check forces a steady turn and then
+    // measures the rider in the horse's OWN BANKED BODY FRAME, where a
+    // correctly seated rider reads the same as they do standing still.
+    //
+    // Steering is driven by replacing _updateMounted for the duration rather
+    // than by simulating input, for the same reason the mount check calls
+    // handleMountToggle directly — headless has no pointer lock. Restored
+    // before returning.
+    const approachSpeed = await page.evaluate(async () => (await import('/src/config-horse.js')).HORSE.approachSpeed);
+    await page.evaluate((speed) => {
+      const h = window.__debug.horse;
+      h.__origUpdateMounted = h._updateMounted;
+      h._updateMounted = function (dt) {
+        const target = this.yaw + 0.9; // hold 0.9rad off the current heading -> a steady turn
+        this._moveDir.set(-Math.sin(target), 0, -Math.cos(target));
+        this._isDrainingStamina = false;
+        this._integrateMovement(dt, speed);
+        this._turnToward(dt, true);
+      };
+    }, approachSpeed);
+    // Predicate stays synchronous — see the async-waitForFunction gotcha above.
+    let banked = true;
+    try {
+      await page.waitForFunction(() => Math.abs(window.__debug.horse.lean) > 0.15, null, { timeout: 20000 });
+    } catch { banked = false; }
+
+    const m = banked ? await page.evaluate(() => {
+      const d = window.__debug;
+      const rig = d.player.character.root;
+      const hrig = d.horse.character.root;
+      rig.updateMatrixWorld(true);
+      hrig.updateMatrixWorld(true);
+      // Undo the horse's whole world matrix — position, yaw AND bank — then
+      // divide out its baked scale, so these read as metres in the horse's own
+      // body frame: side across the barrel, up along its spine, fwd to the nose.
+      const hInv = hrig.matrixWorld.clone().invert();
+      const scale = hrig.scale.x;
+      const inHorse = (name) => {
+        const bone = rig.getObjectByName(name);
+        if (!bone) return null;
+        const p = bone.getWorldPosition(new bone.position.constructor());
+        p.applyMatrix4(hInv).multiplyScalar(scale);
+        return { side: -p.x, up: p.y, fwd: p.z };
+      };
+      const seat = d.horse.getSaddleTransform(new rig.position.constructor()).position.clone();
+      seat.applyMatrix4(hInv).multiplyScalar(scale);
+      return {
+        isPlaceholder: !!d.player.character.isPlaceholder,
+        lean: d.horse.lean,
+        seat: { side: -seat.x, up: seat.y },
+        hips: inHorse('Body'), footL: inHorse('FootL'), footR: inHorse('FootR'),
+      };
+    }) : null;
+
+    await page.evaluate(() => {
+      const h = window.__debug.horse;
+      if (h.__origUpdateMounted) { h._updateMounted = h.__origUpdateMounted; delete h.__origUpdateMounted; }
+    });
+    try {
+      await page.waitForFunction(() => Math.abs(window.__debug.horse.lean) < 0.05, null, { timeout: 20000 });
+    } catch { /* the later checks don't care about a residual lean */ }
+
+    if (!banked) return 'the horse never reached a 0.15rad bank, so the turn was never exercised';
+    if (m.isPlaceholder) return null; // the capsule fallback has no skeleton to measure
+    // The saddle point must track the horse's back, not the world vertical.
+    // Before the fix it stayed on the vertical while the back swung
+    // saddleOffset.y*sin(lean) — 0.64 at the lean limit — out from under it.
+    if (Math.abs(m.seat.side) > 0.05) {
+      return `the seat sits ${m.seat.side.toFixed(2)} off the horse's spine at lean ${m.lean.toFixed(2)} — it is not banking with the horse`;
+    }
+    // ...and the rider's hips must stay on it. Rolling the rig about its root
+    // instead of the seat slid them hipHeight*sin(roll) sideways (0.20 measured).
+    if (Math.abs(m.hips.side) > 0.10) {
+      return `hips are ${m.hips.side.toFixed(2)} off the horse's spine at lean ${m.lean.toFixed(2)} — the rider is sliding off the saddle`;
+    }
+    // Both boots still straddle the barrel, and at the same height as each
+    // other: the tell for the old bug was one boot 0.27 above the other with
+    // the horse no longer between them.
+    if (!(m.footL.side < -0.30 && m.footR.side > 0.30)) {
+      return `boots at ${m.footL.side.toFixed(2)}/${m.footR.side.toFixed(2)} are no longer straddling the barrel mid-turn`;
+    }
+    if (Math.abs(m.footL.up - m.footR.up) > 0.15) {
+      return `boots are ${Math.abs(m.footL.up - m.footR.up).toFixed(2)} apart in height mid-turn — the legs are swinging off the horse`;
+    }
+    return null;
+  }],
   ['mounted camera does not collapse onto the horse\'s own collider', async () => {
     // Regression guard for a real bug: the horse registers a persistent
     // circle collider (for terrain/prop collision, and so a riderless horse
@@ -446,6 +537,346 @@ const CHECKS = [
     }
     return null;
   }],
+  ['horse jump clip is wired as a one-shot, not a locomotion state', async () => {
+    // Unlike the player (whose retargeted jump was built, tuned and pulled —
+    // see docs/DEVELOPMENT-NOTES.md), horse.glb ships a real Gallop_Jump. It
+    // must be a one-shot: setLocomotion loops its action and rescales its
+    // timeScale by ground speed, both wrong for a jump.
+    const info = await page.evaluate(() => {
+      const rig = window.__debug.horse.character;
+      if (rig.isPlaceholder) return 'placeholder';
+      if (typeof rig.setAirborne !== 'function') return { noSetAirborne: true };
+      const jump = rig.actions?.jump;
+      if (!jump) return { noAction: true };
+      return { clip: jump.getClip().name, duration: jump.getClip().duration };
+    });
+    if (info === 'placeholder') return null; // the fallback holds a tucked pose instead
+    if (info.noSetAirborne) return 'horse rig has no setAirborne() — the one-shot cannot be triggered';
+    if (info.noAction) return 'horse-character.js built no "jump" action — HORSE_CLIP_CANDIDATES.jump is unwired';
+    if (!/jump/i.test(info.clip)) return `the jump action plays "${info.clip}", which is not a jump clip`;
+    return null;
+  }],
+  ['scattered props record their own top height, so something can be jumped over', async () => {
+    // Colliders were pure 2D circles of unlimited height until this round, so
+    // nothing in the world could ever be cleared. Props now carry the world Y
+    // of their own visual top; that number is the whole basis of the clearance
+    // rule, so check it is real rather than defaulted.
+    const info = await page.evaluate(async () => {
+      const { colliders } = await import('/src/collision.js');
+      const { heightAt } = await import('/src/terrain.js');
+      const cfg = await import('/src/config-horse.js');
+      const props = colliders.filter((c) => c.meta?.kind && c.meta.kind !== 'horse');
+      const infinite = props.filter((c) => !Number.isFinite(c.top)).length;
+      const heights = (kind) => props.filter((c) => !kind || c.meta.kind === kind)
+        .map((c) => c.top - heightAt(c.x, c.z)).sort((a, b) => a - b);
+      const above = heights(null);
+      const med = (a) => a[Math.floor(a.length / 2)];
+      const reach = cfg.HORSE.bellyHeight - cfg.HORSE.jumpClearMargin
+        + (cfg.HORSE.jumpSpeed * cfg.HORSE.jumpSpeed) / (2 * -cfg.HORSE.gravity);
+      return {
+        count: props.length,
+        infinite,
+        min: above[0],
+        max: above[above.length - 1],
+        medianRock: med(heights('rock')),
+        medianCactus: med(heights('cactus')),
+        medianTree: med(heights('tree')),
+        clearableRocks: heights('rock').filter((h) => h < reach).length,
+        rocks: heights('rock').length,
+        reach,
+      };
+    });
+    if (info.count < 100) return `only ${info.count} prop colliders registered — the world is not scattered`;
+    if (info.infinite > 0) return `${info.infinite} prop colliders still have an infinite top — they can never be jumped`;
+    if (!(info.min > 0.05)) return `the shortest prop stands ${info.min?.toFixed(3)} above its ground — tops are not being measured`;
+    if (!(info.max > 3)) return `the tallest prop is only ${info.max.toFixed(2)} tall — cacti and trees should be far taller`;
+    // Cacti and trees must stay unjumpable however the jump is tuned, or the
+    // horse starts sailing through the scenery.
+    if (info.medianCactus < info.reach || info.medianTree < info.reach) {
+      return `a median cactus (${info.medianCactus.toFixed(2)}) or tree (${info.medianTree.toFixed(2)}) is under the horse's ${info.reach.toFixed(2)} reach`;
+    }
+    // ...and the feature is only worth having if a good share of rocks are.
+    const frac = info.clearableRocks / info.rocks;
+    if (!(frac > 0.5 && frac < 0.98)) {
+      return `${(frac * 100).toFixed(0)}% of rocks are under the horse's ${info.reach.toFixed(2)} reach — the jump is either useless or trivialises every boulder`;
+    }
+    console.log(`  (info) prop tops: median rock ${info.medianRock.toFixed(2)}, cactus ${info.medianCactus.toFixed(2)}, tree ${info.medianTree.toFixed(2)}; horse reach ${info.reach.toFixed(2)} clears ${(frac * 100).toFixed(0)}% of rocks`);
+    return null;
+  }],
+  ['an airborne agent passes over a low obstacle, a grounded one does not', async () => {
+    // The clearance rule itself, exercised directly rather than through a
+    // whole jump: same collider, same agent, three different undersides.
+    const r = await page.evaluate(async () => {
+      const { addCircleCollider, resolveCollisions, removeCollider } = await import('/src/collision.js');
+      const c = addCircleCollider(9000, 9000, 2, { kind: 'smoke-clearance' }, 1);
+      const at = () => ({ x: 9000.5, z: 9000 });
+      const grounded = at();
+      resolveCollisions(grounded, 0.9, null, -Infinity);
+      const flying = at();
+      resolveCollisions(flying, 0.9, null, 1.5); // underside well above the obstacle's top
+      const grazing = at();
+      resolveCollisions(grazing, 0.9, null, 0.6); // ...and not high enough to matter
+      removeCollider(c);
+      const moved = (p) => Math.hypot(p.x - 9000.5, p.z - 9000);
+      return { grounded: moved(grounded), flying: moved(flying), grazing: moved(grazing) };
+    });
+    if (!(r.grounded > 0.5)) return 'a grounded agent was not pushed out of an obstacle it overlaps';
+    if (r.flying > 1e-6) return `an agent clear above the obstacle was still pushed ${r.flying.toFixed(3)} — the height test is not applied`;
+    if (!(r.grazing > 0.5)) return 'an agent below the obstacle top passed through it anyway — the clearance is too generous';
+    return null;
+  }],
+  ['a jump leaves the ground, clears a rock height, and lands again', async () => {
+    // Driven by swapping out _updateMounted (the horse must be moving to jump)
+    // and calling the public handleJump() hook, for the same reason the mount
+    // and bank checks do it that way: headless has no pointer lock, so the
+    // real Space path cannot be triggered.
+    //
+    // The arc is sampled from *inside* the render loop, not by polling from
+    // here — headless chromium renders this scene at ~3fps, so an 0.85s flight
+    // is only about 17 frames and an outside poll would miss the apex. The
+    // same wrapper takes the mid-flight body-frame snapshot the next check
+    // reads, at the moment the rider is fully into the two-point seat.
+    const cfg = await page.evaluate(async () => {
+      const c = (await import('/src/config-horse.js')).HORSE;
+      return { gallopSpeed: c.gallopSpeed, jumpMinSpeed: c.jumpMinSpeed, saddleBone: c.saddleBone };
+    });
+    await page.evaluate((c) => {
+      const h = window.__debug.horse;
+      h.__origUpdateMounted = h._updateMounted;
+      h._updateMounted = function (dt) {
+        this._moveDir.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+        this._isDrainingStamina = false;
+        this._integrateMovement(dt, c.gallopSpeed);
+        this._turnToward(dt, true);
+      };
+      h.__peak = 0;
+      h.__peakClears = 0;
+      h.__groundedClearance = 0;
+      h.__wasAirborne = false;
+      h.__landed = false;
+      h.__groundSnap = null;
+      h.__flightSnap = null;
+      h.__apexSnap = null;
+
+      // Rider bones expressed in the horse's OWN body frame — undo the horse's
+      // whole world matrix (position, yaw, bank AND the new jump pitch), then
+      // divide out its baked scale. Round 2c's method: a correctly seated
+      // rider reads the same in this frame however the horse is oriented.
+      // `spine` is the horse's own saddle bone read the same way, so the rider
+      // can be checked against the back they are actually meant to be sitting
+      // on rather than against a nominal height the jump clip does not respect.
+      const measure = () => {
+        const d = window.__debug;
+        const rig = d.player.character.root;
+        const hrig = d.horse.character.root;
+        rig.updateMatrixWorld(true);
+        hrig.updateMatrixWorld(true);
+        const hInv = hrig.matrixWorld.clone().invert();
+        const scale = hrig.scale.x;
+        const boneIn = (root, name) => {
+          const bone = root.getObjectByName(name);
+          if (!bone) return null;
+          const p = bone.getWorldPosition(new rig.position.constructor());
+          p.applyMatrix4(hInv).multiplyScalar(scale);
+          return { side: -p.x, up: p.y, fwd: p.z };
+        };
+        const seat = d.horse.getSaddleTransform(new rig.position.constructor()).position.clone();
+        seat.applyMatrix4(hInv).multiplyScalar(scale);
+        return {
+          isPlaceholder: !!d.player.character.isPlaceholder,
+          seat: { side: -seat.x, up: seat.y, fwd: seat.z },
+          hips: boneIn(rig, 'Body'), head: boneIn(rig, 'Head'),
+          footL: boneIn(rig, 'FootL'), footR: boneIn(rig, 'FootR'),
+          spine: boneIn(hrig, c.saddleBone),
+        };
+      };
+
+      h.__origUpdate = h.update;
+      h.update = function (dt, camera, player) {
+        h.__origUpdate.call(this, dt, camera, player);
+        const groundY = this.world.groundHeightAt(this.position.x, this.position.z);
+        if (this.jump.airborne) {
+          h.__wasAirborne = true;
+          const lift = this.position.y - groundY;
+          if (lift > h.__peak) {
+            h.__peak = lift;
+            // The clearance the real update() is feeding resolveCollisions at
+            // this instant, against the ground directly under the horse — i.e.
+            // how tall an obstacle it is passing over right now.
+            h.__peakClears = this.jump.clearance() - groundY;
+          }
+        } else if (h.__wasAirborne) {
+          h.__landed = true;
+        } else {
+          h.__groundedClearance = this.jump.clearance();
+        }
+      };
+
+      // The body-frame snapshots come off a wrapper on PLAYER.update, not the
+      // horse one above. main.js runs horse.update -> setSaddle -> player.update,
+      // so anything measured inside horse.update reads the rider's PREVIOUS
+      // frame against this frame's horse. At headless's ~3fps that is a full
+      // 0.05s step, and the jump clip moves the horse's spine ~0.5 of body-frame
+      // height in that time: measured, it put the rider's hips 0.36 away from
+      // the seat they are in fact welded to.
+      const p = window.__debug.player;
+      p.__origUpdate = p.update;
+      p.update = function (dt, camera) {
+        p.__origUpdate.call(this, dt, camera);
+        if (h.jump.airborne) {
+          if (!h.__flightSnap && h.jump.weight > 0.9) h.__flightSnap = measure();
+          // First frame at or past the top of the arc. The jump clip is
+          // stretched over airTime, so its own peak lands there too — which is
+          // exactly why the rider sinking into the horse showed up at the apex
+          // and nowhere else.
+          if (!h.__apexSnap && h.jump.velocityY <= 0) h.__apexSnap = measure();
+        } else if (!h.__wasAirborne && !h.__groundSnap && h.speed > 1) {
+          h.__groundSnap = measure(); // seated reference: moving, but on the ground
+        }
+      };
+    }, cfg);
+
+    const restore = () => page.evaluate(() => {
+      const h = window.__debug.horse;
+      const p = window.__debug.player;
+      if (h.__origUpdateMounted) { h._updateMounted = h.__origUpdateMounted; delete h.__origUpdateMounted; }
+      if (h.__origUpdate) { h.update = h.__origUpdate; delete h.__origUpdate; }
+      if (p.__origUpdate) { p.update = p.__origUpdate; delete p.__origUpdate; }
+    });
+
+    try {
+      // Predicates stay synchronous throughout — see the async-waitForFunction
+      // gotcha noted on the mount check.
+      await page.waitForFunction((v) => window.__debug.horse.speed > v, cfg.jumpMinSpeed, { timeout: 20000 });
+      await page.evaluate(() => window.__debug.horse.handleJump());
+      await page.waitForFunction(() => window.__debug.horse.__wasAirborne, null, { timeout: 20000 });
+      await page.waitForFunction(() => window.__debug.horse.__landed, null, { timeout: 30000 });
+    } catch {
+      const state = await page.evaluate(() => {
+        const h = window.__debug.horse;
+        return { airborne: h.__wasAirborne, landed: h.__landed, speed: h.speed, stamina: h.stamina, mounted: h.mounted };
+      });
+      await restore();
+      if (!state.mounted) return 'expected the player still mounted from the previous checks';
+      if (!state.airborne) return `handleJump() never got the horse off the ground (speed ${state.speed.toFixed(2)}, stamina ${state.stamina.toFixed(2)})`;
+      return 'the horse went up and never came back down';
+    }
+    await restore();
+
+    const r = await page.evaluate(async () => {
+      const { colliders } = await import('/src/collision.js');
+      const { heightAt } = await import('/src/terrain.js');
+      const c = (await import('/src/config-horse.js')).HORSE;
+      const h = window.__debug.horse;
+      const above = colliders.filter((x) => x.meta?.kind === 'rock')
+        .map((x) => x.top - heightAt(x.x, x.z)).sort((a, b) => a - b);
+      return {
+        peak: h.__peak,
+        peakClears: h.__peakClears,
+        groundedClearance: h.__groundedClearance,
+        lift: h.position.y - h.world.groundHeightAt(h.position.x, h.position.z),
+        grounded: h.jump.grounded,
+        restingClearance: h.jump.clearance(),
+        weight: h.jump.weight,
+        shortestRock: above[0],
+        belly: c.bellyHeight - c.jumpClearMargin,
+        apex: (c.jumpSpeed * c.jumpSpeed) / (2 * -c.gravity),
+      };
+    });
+    // The measured peak runs a little under the configured apex because lift is
+    // read against the ground beneath the horse, which is moving 8m across
+    // sloping terrain during the flight. That is the honest number, so the
+    // bound is loose on purpose.
+    if (!(r.peak > r.apex * 0.7)) {
+      return `the jump only reached ${r.peak.toFixed(2)} against a configured apex of ${r.apex.toFixed(2)}`;
+    }
+    // The clearance the real update() actually handed resolveCollisions at the
+    // top of the arc — the integration, not just the arithmetic in isolation.
+    if (r.groundedClearance !== -Infinity) {
+      return `a grounded horse reported a clearance of ${r.groundedClearance} — it would walk through low obstacles`;
+    }
+    if (!(r.peakClears > 2)) {
+      return `at its apex the horse only cleared ${r.peakClears.toFixed(2)} above the ground under it — it cannot pass a real rock`;
+    }
+    if (!(r.peakClears > r.shortestRock)) {
+      return `at its apex the horse cleared ${r.peakClears.toFixed(2)}, under even the shortest rock in the world (${r.shortestRock.toFixed(2)})`;
+    }
+    if (!r.grounded) return `the horse is still ${r.lift.toFixed(2)} off the ground after landing`;
+    if (Math.abs(r.lift) > 0.01) return `landed but resting ${r.lift.toFixed(3)} off the terrain`;
+    if (r.restingClearance !== -Infinity) return 'the horse is grounded but still reporting a jump clearance';
+    if (r.weight > 0.5) return `the two-point seat is still ${r.weight.toFixed(2)} blended in after landing`;
+    return null;
+  }],
+  ['the rider stays in the saddle through the jump', async () => {
+    // Reads the snapshots the previous check took inside the render loop. The
+    // failure this guards is round 2c's, one axis over: the seat is built from
+    // the horse's own root, and a jump moves that root 1.5m vertically while
+    // the jump clip slides the spine 1.15m forward underneath it. Either would
+    // leave the rider behind.
+    const m = await page.evaluate(() => {
+      const h = window.__debug.horse;
+      return { ground: h.__groundSnap, flight: h.__flightSnap, apex: h.__apexSnap };
+    });
+    if (!m.flight) return 'no mid-flight sample was taken — the two-point seat never blended past 0.9';
+    if (m.flight.isPlaceholder) return null; // the capsule fallback has no skeleton to measure
+    if (!m.ground) return 'no grounded reference sample was taken to compare against';
+    const f = m.flight;
+    if (Math.abs(f.seat.side) > 0.05) {
+      return `mid-flight the seat sits ${f.seat.side.toFixed(2)} off the horse's spine`;
+    }
+    if (Math.abs(f.hips.side) > 0.1) {
+      return `mid-flight the rider's hips are ${f.hips.side.toFixed(2)} off the horse's spine`;
+    }
+    // The spine slides forward under the rider during the jump clip and the
+    // seat tracks it (horse-seat.js's drift), so the hips must not end up
+    // somewhere different from where they sit at the same gait on the ground.
+    const slip = Math.abs(f.hips.fwd - m.ground.hips.fwd);
+    if (slip > 0.35) {
+      return `mid-flight the rider's hips are ${slip.toFixed(2)} fore/aft of where they sit on the ground — the seat is not tracking the spine`;
+    }
+    if (!(f.footL.side < -0.26 && f.footR.side > 0.26)) {
+      return `mid-flight the boots at ${f.footL.side.toFixed(2)}/${f.footR.side.toFixed(2)} are no longer straddling the barrel`;
+    }
+    if (Math.abs(f.footL.up - f.footR.up) > 0.15) {
+      return `mid-flight the boots are ${Math.abs(f.footL.up - f.footR.up).toFixed(2)} apart in height — a leg is swinging off`;
+    }
+    // ...and the rider is actually IN the two-point seat rather than sitting
+    // there as if nothing happened. Measured as how far the head carries
+    // forward of the hips, which is the fold RIDING_POSE.jumpTorsoPitch makes:
+    // 0.34rad over the spine is ~0.2m of travel, far above any clip noise.
+    // (Deliberately not measured as the hips *rising* out of the saddle: the
+    // rise is only HORSE.jumpSeatRise, and `Body` is translated every frame by
+    // the idle clip playing underneath — that signal sits inside this rig's own
+    // jitter and read as a false failure on the placeholder-horse path.)
+    const fold = (f.head.fwd - f.hips.fwd) - (m.ground.head.fwd - m.ground.hips.fwd);
+    if (!(fold > 0.06)) {
+      return `the rider folded only ${fold.toFixed(3)} further forward than on the ground — the two-point seat is not engaging`;
+    }
+    // ...and again AT THE APEX, measured against the horse's own saddle bone
+    // rather than against a nominal seat height. The snapshot above is taken as
+    // soon as the two-point seat blends in, which is a quarter of the way up;
+    // the apex is where Gallop_Jump's own rise peaks (the clip is stretched over
+    // airTime, so its mid-point is the top of the arc) and it lifts this bone
+    // 0.750 in the horse's body frame, five times HORSE.saddleBobLimit. A rider
+    // who does not follow that outright is inside the horse for the few frames
+    // it lasts — measured at 0.61 of the pelvis buried under the back surface
+    // before the fix, which is what the human saw.
+    const apex = m.apex;
+    if (!apex) return 'no apex sample was taken — the arc never reached the top';
+    if (apex.spine && m.ground.spine) {
+      const sank = (apex.hips.up - apex.spine.up) - (m.ground.hips.up - m.ground.spine.up);
+      if (Math.abs(sank) > 0.2) {
+        return sank < 0
+          ? `at the apex the rider sits ${(-sank).toFixed(2)} lower on the horse's spine than on the ground — the back is rising through them`
+          : `at the apex the rider floats ${sank.toFixed(2)} higher off the horse's spine than on the ground`;
+      }
+      const slid = (apex.hips.fwd - apex.spine.fwd) - (m.ground.hips.fwd - m.ground.spine.fwd);
+      if (Math.abs(slid) > 0.2) {
+        return `at the apex the rider sits ${slid.toFixed(2)} fore/aft of the horse's spine bone — the seat is not inheriting the jump pitch`;
+      }
+    }
+    return null;
+  }],
   ['dismount releases the player back onto the terrain', async () => {
     const result = await page.evaluate(async () => {
       const cfg = await import('/src/config.js');
@@ -496,13 +927,41 @@ const CHECKS = [
     if (typeof info.stamina !== 'number') return `horse.stamina missing (${info.stamina})`;
     return info.stamina >= 0 && info.stamina <= info.max ? null : `horse.stamina is ${info.stamina}, expected within [0, ${info.max}]`;
   }],
+  ['the stamina bar is fed a fraction, not raw stamina', async () => {
+    // HORSE.staminaMax is not 1 and is expected to keep moving as the ride is
+    // tuned, but ui.js is generic and documents its argument as 0..1. Reading
+    // the width the bar is actually rendering at catches the whole path —
+    // horse.staminaFraction, main.js's call, and the CSS — rather than just the
+    // getter's arithmetic. At staminaMax 1.5 the raw value would render 150%.
+    const info = await page.evaluate(async () => {
+      const cfg = await import('/src/config-horse.js');
+      const h = window.__debug?.horse;
+      return {
+        fraction: h?.staminaFraction,
+        stamina: h?.stamina,
+        max: cfg.HORSE.staminaMax,
+        width: document.getElementById('staminaFill')?.style?.width ?? null,
+      };
+    });
+    if (typeof info.fraction !== 'number') return `horse.staminaFraction missing (${info.fraction})`;
+    if (info.fraction < 0 || info.fraction > 1) {
+      return `horse.staminaFraction is ${info.fraction.toFixed(3)}, which is not a 0..1 fraction`;
+    }
+    if (Math.abs(info.fraction - info.stamina / info.max) > 1e-9) {
+      return `horse.staminaFraction (${info.fraction}) is not stamina/staminaMax (${info.stamina / info.max})`;
+    }
+    const pct = Number.parseFloat(info.width);
+    if (!Number.isFinite(pct)) return `the stamina bar has no rendered width (${info.width})`;
+    if (pct < 0 || pct > 100) return `the stamina bar is rendering at ${info.width} — it is being fed raw stamina, not a fraction`;
+    return null;
+  }],
 
   ['no leftover jump clip on the real player rig (removed feature)', async () => {
     // Regression guard for the opposite direction now: the retargeted jump
     // clip (retarget.js + config.js's ANIM_SOURCE/HIP_FOLLOW/KNEE_FOLLOW)
     // was built, tuned repeatedly, and ultimately pulled out because it
-    // never read as right in real play — see CLAUDE.md's "Known rough
-    // edges". character.js should never construct a "jump" action anymore;
+    // never read as right in real play — see docs/DEVELOPMENT-NOTES.md.
+    // character.js should never construct a "jump" action anymore;
     // this catches a partial revert that leaves the pipeline half-wired.
     const info = await page.evaluate(() => ({
       isPlaceholder: window.__debug?.modelsLoaded?.player === false,

@@ -16,8 +16,8 @@
  * pulled out entirely rather than shipped broken. `setAirborne()` is now a
  * no-op on the real rig: player.js already halves locomotion playback speed
  * while airborne (`ANIM.airTimeScale`), so a jump just holds the current
- * idle/walk/run pose, slowed, for the flight — see CLAUDE.md's "Known rough
- * edges" for the removal writeup.
+ * idle/walk/run pose, slowed, for the flight — see docs/DEVELOPMENT-NOTES.md
+ * for the removal writeup.
  */
 
 import * as THREE from 'three';
@@ -67,6 +67,7 @@ class PlayerCharacterRig {
     this.pose.captureBaseline();
     this._ridingWeight = 0;
     this._ridingSway = 0;
+    this._ridingJump = 0;
 
     // How high the pelvis rides above the rig's own origin. horse.js's saddle
     // offset is a *seat* height, so player.js places the root this far below it
@@ -88,10 +89,13 @@ class PlayerCharacterRig {
    * @param {number} weight 0..1 — how much of the seated pose to blend in.
    * @param {number} sway   -1..1 — the horse's live gait bob, so the rider's
    *   hands and torso move with the stride. See riding-pose.js.
+   * @param {number} jump   0..1 — how far into the two-point jumping seat the
+   *   rider is, while the horse is over an obstacle.
    */
-  setRidingPose(weight, sway = 0) {
+  setRidingPose(weight, sway = 0, jump = 0) {
     this._ridingWeight = weight;
     this._ridingSway = sway;
+    this._ridingJump = jump;
   }
 
   /**
@@ -139,7 +143,7 @@ class PlayerCharacterRig {
     // the still-playing idle clip just wrote. Called unconditionally, including
     // at weight 0 — that is how the pose knows to let go of the bones no clip
     // will reclaim on its own. See riding-pose.js.
-    this.pose.apply(this._ridingWeight, this._ridingSway);
+    this.pose.apply(this._ridingWeight, this._ridingSway, this._ridingJump);
   }
 }
 

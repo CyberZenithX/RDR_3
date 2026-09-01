@@ -80,6 +80,7 @@ export class PlaceholderHuman {
     this._jumpTargetWeight = 0;
     this._ridingWeight = 0;
     this._ridingSway = 0;
+    this._ridingJump = 0;
     // Matches the real rig's own measured pelvis height, so horse.js's saddle
     // offset means the same thing whichever rig is in play.
     this.hipHeight = PLACEHOLDER.hipHeight;
@@ -101,9 +102,13 @@ export class PlaceholderHuman {
    * with no skeleton to fight. Angles mirror RIDING_POSE's intent rather than
    * its exact values — the proportions differ.
    */
-  setRidingPose(weight, sway = 0) {
+  setRidingPose(weight, sway = 0, jump = 0) {
     this._ridingWeight = THREE.MathUtils.clamp(weight, 0, 1);
     this._ridingSway = sway;
+    // The two-point jumping seat is a skeleton pose on the real rig; these
+    // rigid capsules have no such subtlety, so it folds in as a little extra
+    // forward carriage rather than being ignored outright.
+    this._ridingJump = THREE.MathUtils.clamp(jump, 0, 1);
   }
 
   update(dt) {
@@ -148,19 +153,20 @@ export class PlaceholderHuman {
     if (this._ridingWeight > 0.002) {
       const w = this._ridingWeight;
       const s = this._ridingSway * w;
+      const j = this._ridingJump * w;
       const lerp = THREE.MathUtils.lerp;
       for (const side of [-1, 1]) {
         const key = side < 0 ? 'L' : 'R';
         const leg = this.legs[key];
         const arm = this.arms[key];
-        leg.hip.rotation.x = lerp(leg.hip.rotation.x, -(RIDING_POSE.thighPitch + RIDING_POSE.swayThigh * s), w);
+        leg.hip.rotation.x = lerp(leg.hip.rotation.x, -(RIDING_POSE.thighPitch + RIDING_POSE.swayThigh * s + RIDING_POSE.jumpThighPitch * j), w);
         leg.hip.rotation.z = lerp(leg.hip.rotation.z, -side * RIDING_POSE.thighSpread, w);
-        leg.knee.rotation.x = lerp(leg.knee.rotation.x, RIDING_POSE.kneeBend, w);
-        arm.shoulder.rotation.x = lerp(arm.shoulder.rotation.x, -RIDING_POSE.armPitch, w);
+        leg.knee.rotation.x = lerp(leg.knee.rotation.x, RIDING_POSE.kneeBend + RIDING_POSE.jumpKneeBend * j, w);
+        arm.shoulder.rotation.x = lerp(arm.shoulder.rotation.x, -(RIDING_POSE.armPitch + RIDING_POSE.jumpArmPitch * j), w);
         arm.shoulder.rotation.z = lerp(arm.shoulder.rotation.z, side * RIDING_POSE.armIn, w);
-        arm.elbow.rotation.x = lerp(arm.elbow.rotation.x, -(RIDING_POSE.elbowBend + RIDING_POSE.swayElbow * s), w);
+        arm.elbow.rotation.x = lerp(arm.elbow.rotation.x, -(RIDING_POSE.elbowBend + RIDING_POSE.swayElbow * s + RIDING_POSE.jumpElbowBend * j), w);
       }
-      this.hips.rotation.x = lerp(this.hips.rotation.x, RIDING_POSE.torsoPitch, w);
+      this.hips.rotation.x = lerp(this.hips.rotation.x, RIDING_POSE.torsoPitch + RIDING_POSE.jumpTorsoPitch * j, w);
     } else if (this.hips.rotation.x !== 0) {
       // Dismounted: unlike the real rig there is no mixer to overwrite these,
       // so the seated angles have to be released explicitly.

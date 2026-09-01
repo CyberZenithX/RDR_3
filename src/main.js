@@ -88,7 +88,7 @@ async function init() {
     if (player.mounted) {
       // Read player.mounted fresh, *after* horse.update() — a same-frame
       // dismount already wrote the drop-off position and must not be
-      // overwritten by a stale saddle sync. See CLAUDE.md.
+      // overwritten by a stale saddle sync. See docs/DECISIONS.md ADR-016.
       player.setSaddle(horse.getSaddleTransform(_scratchSaddlePos));
     }
     player.update(dt, tpCamera);
@@ -105,7 +105,7 @@ async function init() {
     tpCamera.update(dt, player.position, player.mounted ? horse.speed : player.speed, player.mounted ? horse.collider : null);
     world.update(player.position);
     ui.updateBoundaryWarning(dt, player.boundaryProximity);
-    ui.updateStamina(horse.stamina, horse.staminaExhausted);
+    ui.updateStamina(horse.staminaFraction, horse.staminaExhausted);
 
     renderer.render(scene, camera);
     window.__frames++;
@@ -120,6 +120,9 @@ async function init() {
     window.__debug.horsePos = { x: horse.position.x, y: horse.position.y, z: horse.position.z };
     window.__debug.horseStamina = horse.stamina;
     window.__debug.mounted = player.mounted;
+    window.__debug.horseAirborne = horse.jump.airborne;
+    window.__debug.horseVelocityY = horse.jump.velocityY;
+    window.__debug.horseJumpWeight = horse.jump.weight;
   });
 }
 

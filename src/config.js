@@ -172,9 +172,9 @@ export const ANIM = {
   blendBand: 1.2, // width of the walk↔run crossfade band
   minTimeScale: 0.5,
   maxTimeScale: 2.0,
-  // No dedicated jump clip (see character.js's file header and CLAUDE.md's
-  // "Known rough edges" for the removal story) -- this is what makes a jump
-  // read as "airborne" at all: player.js multiplies the locomotion clip's
+  // No dedicated jump clip (see character.js's file header and
+  // docs/DEVELOPMENT-NOTES.md for the removal story) -- this is what makes a
+  // jump read as "airborne" at all: player.js multiplies the locomotion clip's
   // driving speed by this before handing it to setLocomotion(), so the
   // idle/walk/run pose that was already playing holds and slows down while
   // in the air instead of continuing at full ground pace.
@@ -252,6 +252,16 @@ export const CAMERA = {
   mountedDistance: 7.6,
   mountedPivotHeight: 2.0,
   mountedSwayRun: 0.045, // galloping sways harder than sprinting on foot
+  // The pivot's height is chased rather than copied, so a horse jump (1.5m of
+  // arc in under a second) reads as the camera being left slightly behind
+  // instead of the whole world dropping rigidly with the rider. Deliberately
+  // stiff: terrain undulation at any ground speed is far slower than this and
+  // is followed essentially exactly.
+  pivotFollowRate: 11,
+  // ...but a teleport is not motion. Anything bigger than this (respawn, the
+  // drop off the side of the horse) snaps rather than sweeping the camera
+  // vertically across the gap.
+  pivotSnapDistance: 3,
 };
 
 export const INPUT = {

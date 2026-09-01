@@ -12,6 +12,11 @@ import { PLAYER, ANIM, TOWN, BOUNDARY, SPAWN } from './config.js';
 import { isKeyDown, isPointerLocked } from './input.js';
 import { resolveCollisions } from './collision.js';
 
+// Reused every mounted frame — nothing here allocates. See setSaddle().
+const _rideEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+const _rideQuat = new THREE.Quaternion();
+const _hipOffset = new THREE.Vector3();
+
 function lerpAngle(a, b, t) {
   let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
   if (diff < -Math.PI) diff += Math.PI * 2;
@@ -55,6 +60,7 @@ export class Player {
     this.rideRoll = 0;
     this.ridePitch = 0;
     this.rideSway = 0;
+    this.rideJump = 0;
 
     this._coyoteTimer = 0;
     this._jumpBufferTimer = 0;
@@ -74,6 +80,11 @@ export class Player {
     this.velocityY = 0;
     this.grounded = true;
     this.mounted = true;
+    // Space means "the horse jumps" from here on (horse-jump.js reads it). Drop
+    // any press already in flight so swinging into the saddle mid-stride does
+    // not leave a buffered on-foot jump waiting to fire at the next dismount.
+    this._jumpBufferTimer = 0;
+    this._prevSpaceDown = false;
   }
 
   /**
@@ -84,16 +95,30 @@ export class Player {
    */
   setSaddle(saddle) {
     this.position.copy(saddle.position);
+    // The offset comes off along the *rider's own* up axis, not the world's.
+    // The rig rotates about its root, which is a whole hip height below the
+    // seat, so dropping straight down and then rolling swings the hips off the
+    // saddle by `hipHeight * sin(roll)` — measured 0.20 at the 0.25rad lean
+    // limit, against a barrel only 0.33 wide. That, with the seat not banking
+    // either (see horse.js's getSaddleTransform), is what threw the rider's
+    // legs off the horse on every turn. Rotating the offset instead pins the
+    // hips to the saddle point and makes roll and pitch pivot there, which is
+    // where a rider actually hinges.
+    //
     // Scaled by the mount blend, not applied outright: the blend runs from
     // where the player stood on the ground to the seat, and taking a whole hip
     // height off at t=0 would drop them through the terrain for the first
     // frame of it. At t=1 this is the full offset, which is what seats them.
-    this.position.y -= (this.character.hipHeight ?? 0) * saddle.blend;
+    _rideEuler.set(saddle.pitch, saddle.yaw + PLAYER.meshYawOffset, saddle.roll, 'YXZ');
+    _rideQuat.setFromEuler(_rideEuler);
+    _hipOffset.set(0, (this.character.hipHeight ?? 0) * saddle.blend, 0).applyQuaternion(_rideQuat);
+    this.position.sub(_hipOffset);
     this.meshYaw = saddle.yaw;
     this.rideBlend = saddle.blend;
     this.rideRoll = saddle.roll;
     this.ridePitch = saddle.pitch;
     this.rideSway = saddle.sway;
+    this.rideJump = saddle.jump;
   }
 
   /** Called by horse.js on dismount, with a ground-level drop-off point already resolved. */
@@ -108,7 +133,11 @@ export class Player {
     this.rideRoll = 0;
     this.ridePitch = 0;
     this.rideSway = 0;
-    this.character.setRidingPose(0, 0);
+    this.rideJump = 0;
+    // Space was the horse's jump while mounted — see mount() for the mirror.
+    this._jumpBufferTimer = 0;
+    this._prevSpaceDown = false;
+    this.character.setRidingPose(0, 0, 0);
     this.character.root.rotation.set(0, this.meshYaw + PLAYER.meshYawOffset, 0);
   }
 
@@ -122,8 +151,12 @@ export class Player {
       this.boundaryProximity = 0;
       this.character.setLocomotion('idle', 0);
       this.character.setAirborne(false);
-      this.character.setRidingPose(this.rideBlend, this.rideSway);
-      this.character.update(dt);
+      this.character.setRidingPose(this.rideBlend, this.rideSway, this.rideJump);
+      // The root transform is written *before* character.update(), unlike the
+      // on-foot branch below. riding-pose.js authors every angle in the root's
+      // own frame and converts it through the root's live world rotation, so
+      // posing first would convert this frame's angles through last frame's
+      // lean — a frame of skew that only grows as the bank does.
       this.character.root.position.copy(this.position);
       // YXZ so roll is applied about the rider's own forward axis and pitch
       // about their own right axis, whichever way they happen to be facing —
@@ -135,6 +168,7 @@ export class Player {
         this.meshYaw + PLAYER.meshYawOffset,
         this.rideRoll,
       );
+      this.character.update(dt);
       return;
     }
 
