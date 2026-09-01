@@ -28,10 +28,35 @@ export const HORSE = {
 
   // No hand/seat bone on this rig (BUILD-PLAN.md expects this) — a hand-tuned
   // offset from the horse's root (ground/hoof level, matching PLAYER's own
-  // feet-at-origin convention) instead. Visually checked via a mounted-view
-  // screenshot and reads correctly (rider sits on the saddle, not floating
-  // or sunk in) — see CLAUDE.md. Still a first-pass guess; nudge to taste.
-  saddleOffset: { x: 0, y: 1.32, z: 0.08 },
+  // feet-at-origin convention) instead. `y` here is where the rider's *hips*
+  // sit, not their feet: the rider is posed seated (see riding-pose.js), so
+  // player.js subtracts the rig's own hip height before placing the root.
+  // Set against a real measurement, not by eye: raycasting straight down onto
+  // the horse's *animated* mesh (SkinnedMesh.raycast applies bone transforms,
+  // unlike reading the geometry buffer, which reports the bind pose and is
+  // ~0.4 too high) puts the back surface at 1.98 above the horse's origin, and
+  // the pelvis rides a little above that so the seat itself lands on the back.
+  saddleOffset: { x: 0, y: 2.06, z: -0.02 },
+
+  // The saddle point rides the horse's own spine bone rather than a fixed
+  // height, so the rider bobs in sync with whatever clip is actually playing.
+  // Measured directly (stepping each clip through its cycle and reading the
+  // bone's world Y): this bone travels 0.006 through idle, 0.058 through walk
+  // and 0.146 through gallop, and its *mean* height differs per gait too
+  // (~1.53 idle, ~1.42 walk) — so any fixed offset necessarily floats at one
+  // gait and sinks at another. See CLAUDE.md.
+  saddleBone: 'Torso2',
+  // How much of the back's vertical travel the rider actually takes. A real
+  // rider absorbs part of it through hip/knee flex rather than being welded to
+  // the saddle; 1.0 reads like a sack of flour strapped on.
+  saddleFollow: 0.72,
+  saddleBobLimit: 0.16, // hard clamp on inherited bob, so a wild clip can't launch the rider
+
+  // Rider body reacting to the horse underneath it.
+  riderLean: 0.8, // fraction of the horse's own bank angle the rider shares
+  riderGallopPitch: 0.15, // radians of forward lean at full gallop
+  riderPitchRate: 3.5, // smoothing rate on that lean, so it eases in/out of a gallop
+  riderBobSway: 0.5, // how strongly the gait bob drives the rein-hand/torso motion
 
   walkSpeed: 2.4, // casual wander / ridden trot-equivalent (no Trot clip exists — see HORSE_CLIP_CANDIDATES)
   approachSpeed: 4.2, // closing the gap when whistled or catching up to the player
@@ -82,6 +107,88 @@ export const HORSE_CLIP_CANDIDATES = {
 
 /** Metres/second each horse clip is authored at — same feet-don't-slide reasoning as CLIP_REFERENCE_SPEED. Tuned by eye. */
 export const HORSE_CLIP_REFERENCE_SPEED = { idle: 1, walk: 2.4, gallop: 7 };
+
+/**
+ * The seated riding pose, in radians, authored in the *character root's* frame
+ * (+X = the rider's left, +Y = up, +Z = the way they face — confirmed by
+ * reading real bone positions out of the live rig, not assumed). riding-pose.js
+ * converts each of these into the bone's own local space at runtime, because
+ * this rig's rest orientations are baked-IK arbitrary and hand-authoring angles
+ * in bone-local space is unreadable.
+ *
+ * player.glb has no seated clip of any kind (see CLAUDE.md's clip inventory —
+ * all 24 are standing/combat), so this pose is the whole of "sitting on a
+ * horse". It is applied *after* mixer.update() every frame, which is what lets
+ * it win over the idle clip still playing underneath.
+ */
+export const RIDING_POSE = {
+  thighPitch: 0.92, // thigh swings forward from hanging, to sit astride
+  // This rig's two legs are NOT mirror images of each other at rest: measured
+  // on the live skeleton, the right hip sits 0.11 further forward than the
+  // left and its knee 0.25 further forward, in the bind pose and in every
+  // clip. A mirrored angle therefore produces an unmirrored leg — the right
+  // knee ended up buried inside the horse while the left cleared it. These
+  // trims are the right leg's correction, solved for numerically against the
+  // left leg's mirrored knee and foot rather than eyeballed.
+  rightPitchTrim: -0.6,
+  rightSpreadTrim: 0.1,
+  rightKneeTrim: -0.1,
+  thighSpread: 0.42, // ...and outward, to clear the barrel: measured half-width
+  //                     at the saddle is 0.33, so the knee has to reach past that
+  kneeBend: 1.02, // shin folds back down so the lower leg hangs by the girth
+  anklePitch: 0.12, // toe up, heel down — how a boot sits in a stirrup
+  armPitch: 0.42, // upper arm forward from hanging, elbows staying near the ribs
+  armIn: 0.20, // ...and tucked in toward the body's centreline
+  elbowBend: 0.95, // forearm forward and level, hands meeting over the withers
+  torsoPitch: 0.12, // slight forward carriage; a bolt-upright rider reads stiff
+  headPitch: -0.04, // chin fractionally up so the rider looks ahead, not down
+  gripCurl: 0.62, // fingers closed around the reins — the rest pose has them splayed flat
+  thumbCurl: 0.34, // thumb lies over the top, less closed than the fingers
+
+  // Gait-driven motion layered on top of the static pose, driven by the same
+  // spine-bone bob the saddle point uses (so it is in phase with the horse by
+  // construction, not by a guessed sine wave).
+  swayElbow: 0.16, // rein hands give with each stride
+  swayTorso: 0.05,
+  swayThigh: 0.05, // legs absorb a little of the motion the seat doesn't
+};
+
+/**
+ * The bridle and reins (src/reins.js). Every head measurement is expressed in
+ * the horse's *own head frame* — `forward` toward the muzzle, `up` toward the
+ * ears, `side` across them — because that frame is rebuilt from the ear and
+ * head bones each frame and so stays right through every head movement.
+ *
+ * The numbers come from raycasting the animated head: the muzzle reaches 0.50
+ * forward of the head bone and about 0.20 below it, and is roughly 0.17 wide
+ * and 0.30 deep where the noseband sits.
+ */
+export const TACK = {
+  color: 0x2b1d13, // dark oiled leather
+
+  bitForward: 0.44, // where the rein leaves the mouth, along the head's forward axis
+  bitUp: -0.2,
+  bitHalfWidth: 0.11,
+
+  nosebandForward: 0.3,
+  nosebandUp: -0.12,
+  nosebandHalfWidth: 0.15,
+  nosebandHalfHeight: 0.18,
+
+  crownForward: -0.03, // the strap over the poll, just in front of the ears
+  crownUp: 0.05,
+  crownHalfWidth: 0.13,
+
+  strapRadius: 0.012,
+  reinRadius: 0.014,
+  reinSag: 0.1, // droop as a fraction of the span — leather, not wire
+  reinDrapeSag: 0.16, // reins lie slacker when nobody is holding them
+  neckDrapeSide: 0.12, // how far to either side of the neck they rest when unmounted
+  // How far above the neck bone the reins are held clear. Without this the
+  // straight run from bit to hands cuts through the crest of the neck whenever
+  // the horse lowers its head, which it does hard at a gallop.
+  neckClearance: 0.28,
+};
 
 /** Proportions for the procedural quadruped stand-in used if horse.glb fails to load. */
 export const PLACEHOLDER_HORSE = {

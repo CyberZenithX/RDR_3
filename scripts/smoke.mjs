@@ -276,17 +276,110 @@ const CHECKS = [
       const dx = p.position.x - h.position.x, dz = p.position.z - h.position.z;
       const horizOffset = Math.hypot(dx, dz);
       const expectedHoriz = Math.hypot(cfg.HORSE.saddleOffset.x, cfg.HORSE.saddleOffset.z);
-      const vertOffset = p.position.y - h.position.y;
-      return { mounted: p.mounted, horizOffset, expectedHoriz, vertOffset, expectedVert: cfg.HORSE.saddleOffset.y };
+      // saddleOffset.y is a SEAT height — where the rider's hips go — because
+      // the rider is posed seated. player.js places the rig's root that far
+      // below it, so the hip height has to be added back before comparing.
+      const hipHeight = p.character.hipHeight ?? 0;
+      const vertOffset = p.position.y + hipHeight - h.position.y;
+      return { mounted: p.mounted, horizOffset, expectedHoriz, vertOffset, hipHeight, expectedVert: cfg.HORSE.saddleOffset.y };
     });
     if (after.mounted !== true) return 'player un-mounted itself unexpectedly while riding';
+    if (!(after.hipHeight > 0.4 && after.hipHeight < 1.4)) {
+      return `rig hip height measured as ${after.hipHeight.toFixed(2)}, which is not a plausible pelvis height`;
+    }
     if (Math.abs(after.horizOffset - after.expectedHoriz) > 0.15) {
       return `saddle horizontal offset is ${after.horizOffset.toFixed(2)}, expected ~${after.expectedHoriz.toFixed(2)}`;
     }
-    if (Math.abs(after.vertOffset - after.expectedVert) > 0.15) {
+    // Loosened from 0.15 to 0.25: the seat now rides the horse's spine bone, so
+    // it legitimately sits up to HORSE.saddleBobLimit off the nominal height
+    // depending on where in the gait cycle the sample lands.
+    if (Math.abs(after.vertOffset - after.expectedVert) > 0.25) {
       return `saddle vertical offset is ${after.vertOffset.toFixed(2)}, expected ~${after.expectedVert.toFixed(2)}`;
     }
     return null;
+  }],
+  ['rider is posed seated, not standing on the horse', async () => {
+    // The rider has no seated clip, so the pose is built bone by bone
+    // (riding-pose.js). Checked in the character root's own frame, where +Y is
+    // up and +Z is the way the rider faces: a seated leg has its knee well
+    // forward of the hip and its foot well below the knee, which a standing
+    // leg — the pose this replaced — does not.
+    const pose = await page.evaluate(() => {
+      const rig = window.__debug.player.character;
+      const root = rig.root;
+      root.updateMatrixWorld(true);
+      const local = (name) => {
+        const bone = root.getObjectByName(name);
+        if (!bone) return null;
+        const p = bone.getWorldPosition(new bone.position.constructor());
+        root.worldToLocal(p);
+        return { x: p.x, y: p.y, z: p.z };
+      };
+      return {
+        mounted: window.__debug.player.mounted,
+        isPlaceholder: !!rig.isPlaceholder,
+        available: !!rig.pose?.available,
+        canGrip: !!rig.pose?.canGrip,
+        hip: local('UpperLegL'), knee: local('LowerLegL'), foot: local('FootL'),
+        kneeR: local('LowerLegR'), wrist: local('WristL'), chest: local('Chest'), body: local('Body'),
+      };
+    });
+    if (pose.mounted !== true) return 'expected player still mounted from the previous check';
+    // The capsule placeholder has its own, much simpler seated pose (plain
+    // group rotations, no skeleton), so these skeleton assertions do not apply
+    // to it — same reason the "player.glb loaded" check above exists.
+    if (pose.isPlaceholder) return null;
+    if (!pose.available) return 'riding pose reported unavailable — the rig is missing leg bones';
+    if (!pose.canGrip) return 'riding pose could not derive finger grip axes — hands will stay splayed open';
+    if (!(pose.knee.z - pose.hip.z > 0.15)) {
+      return `knee is only ${(pose.knee.z - pose.hip.z).toFixed(2)} forward of the hip — the rider is not sitting`;
+    }
+    if (!(pose.knee.y - pose.foot.y > 0.3)) {
+      return `foot is only ${(pose.knee.y - pose.foot.y).toFixed(2)} below the knee — the shin is not hanging`;
+    }
+    // Legs must straddle rather than pass through the horse. Barrel half-width
+    // measured by raycasting the *animated* mesh: 0.33 at its widest (1.6 above
+    // the horse's origin), tapering to ~0.30 at the height the knees ride at.
+    // The floor here is a little under that — the rig's two legs are not mirror
+    // images (see RIDING_POSE's right-leg trims), so the right knee sits
+    // slightly inboard of the left even after correction.
+    if (!(pose.knee.x > 0.26 && pose.kneeR.x < -0.26)) {
+      return `knees at x=${pose.knee.x.toFixed(2)}/${pose.kneeR.x.toFixed(2)} are buried inside the horse's barrel`;
+    }
+    // ...and they must stay roughly mirrored, which is what the trims exist for.
+    if (Math.abs(pose.knee.x + pose.kneeR.x) > 0.16) {
+      return `knees are lopsided: x=${pose.knee.x.toFixed(2)} vs ${pose.kneeR.x.toFixed(2)}`;
+    }
+    // The spine leans forward, never back — a backwards lean was a real bug
+    // (a per-frame delta compounding on a bone no clip rewrites).
+    if (!(pose.chest.z >= pose.body.z)) {
+      return `chest is ${(pose.body.z - pose.chest.z).toFixed(2)} behind the pelvis — the rider is leaning backwards`;
+    }
+    if (!(pose.wrist.z > pose.body.z + 0.15)) {
+      return `hands are only ${(pose.wrist.z - pose.body.z).toFixed(2)} forward of the pelvis — not out on the reins`;
+    }
+    return null;
+  }],
+  ['riding pose is idempotent across frames', async () => {
+    // Guards the compounding bug directly: the pose applies deltas, and a bone
+    // no clip rewrites (Torso is absent from the idle clip's tracks) would
+    // otherwise accumulate them every frame until the rider folded over
+    // backwards. Same pose, many frames apart, must land in the same place.
+    const first = await page.evaluate(() => {
+      const rig = window.__debug.player.character;
+      if (rig.isPlaceholder) return 'placeholder';
+      const b = rig.root.getObjectByName('Torso');
+      return b ? b.quaternion.toArray() : null;
+    });
+    if (first === 'placeholder') return null; // no skeleton to compound on
+    if (!first) return 'Torso bone not found on the player rig';
+    await page.waitForFunction((n) => window.__frames > n, await page.evaluate(() => window.__frames + 12), { timeout: 30000 });
+    const second = await page.evaluate(() => {
+      const b = window.__debug.player.character.root.getObjectByName('Torso');
+      return b.quaternion.toArray();
+    });
+    const drift = Math.max(...first.map((v, i) => Math.abs(v - second[i])));
+    return drift < 0.02 ? null : `Torso rotation drifted by ${drift.toFixed(3)} over 12 frames of riding — the pose is compounding, not idempotent`;
   }],
   ['mounted camera does not collapse onto the horse\'s own collider', async () => {
     // Regression guard for a real bug: the horse registers a persistent
@@ -305,6 +398,54 @@ const CHECKS = [
     if (info.mounted !== true) return `expected player still mounted from the previous check (mounted=${info.mounted})`;
     return info.dist > info.min + 1 ? null : `mounted camera currentDistance is ${info.dist.toFixed(2)}, close to minDistance (${info.min}) — expected near mountedDistance (${info.target})`;
   }],
+  ['reins connect the rider\'s hands to the horse\'s mouth', async () => {
+    // The rider's fists held nothing until the tack existed (horse.glb ships no
+    // bridle). Both ends are checked against live bones: the bit end near the
+    // muzzle, the hand end at the fist. Reads the strand buffer directly, since
+    // the straps are one shared geometry rewritten each frame rather than
+    // objects with their own transforms.
+    const info = await page.evaluate(() => {
+      const d = window.__debug;
+      const reins = d.reins;
+      if (!reins?.available) return { available: false };
+      const pos = reins.geometry.getAttribute('position');
+      const RING = 13, SIDES = 4, PER = RING * SIDES;
+      // Average of a ring's four vertices is the curve point it was built around.
+      const ringAt = (strand, ring) => {
+        let x = 0, y = 0, z = 0;
+        for (let s = 0; s < SIDES; s++) {
+          const v = strand * PER + ring * SIDES + s;
+          x += pos.getX(v); y += pos.getY(v); z += pos.getZ(v);
+        }
+        return { x: x / SIDES, y: y / SIDES, z: z / SIDES };
+      };
+      const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+      const V = d.horse.position.constructor;
+      const headBone = d.horse.character.root.getObjectByName('Head');
+      const head = headBone.getWorldPosition(new V());
+      const hand = reins.handR?.getWorldPosition(new V()) ?? null;
+      const bitEnd = ringAt(1, 0);           // reinR, bit end
+      const handEnd = ringAt(1, RING - 1);   // reinR, hand end
+      return {
+        available: true,
+        mounted: d.player.mounted,
+        bitToHead: dist(bitEnd, head),
+        handGap: hand ? dist(handEnd, hand) : null,
+        strapCount: pos.count / PER,
+      };
+    });
+    if (!info.available) return null; // placeholder horse has no skeleton to hang tack on
+    if (info.mounted !== true) return 'expected the player still mounted from the previous check';
+    if (info.strapCount < 6) return `only ${info.strapCount} straps in the tack buffer, expected 6 (2 reins + bridle)`;
+    // The bit sits on the muzzle, roughly half a head forward of the head bone.
+    if (!(info.bitToHead > 0.15 && info.bitToHead < 0.9)) {
+      return `rein's bit end is ${info.bitToHead.toFixed(2)} from the head bone — not on the muzzle`;
+    }
+    if (!(info.handGap !== null && info.handGap < 0.1)) {
+      return `rein's other end is ${info.handGap?.toFixed(2)} from the rider's hand — the hands are holding air again`;
+    }
+    return null;
+  }],
   ['dismount releases the player back onto the terrain', async () => {
     const result = await page.evaluate(async () => {
       const cfg = await import('/src/config.js');
@@ -316,6 +457,29 @@ const CHECKS = [
     });
     if (result.mounted !== false) return 'handleMountToggle while mounted did not dismount';
     return Math.abs(result.y - result.groundY) < 0.5 ? null : `dismounted player.position.y (${result.y}) is not on the ground (${result.groundY})`;
+  }],
+  ['dismounting releases the riding pose, including bones no clip reclaims', async () => {
+    // The rider stands up again only because riding-pose.js explicitly puts
+    // back the bones the idle clip does not animate. `Torso` is the one that
+    // bites: it is in no idle track, so without that release a dismounted
+    // player keeps a rider's forward lean while standing still, and only
+    // straightens up once they walk (walk and run *do* animate it). Reaches
+    // into pose._rest for the reference, same latitude smoke already takes with
+    // horse._mountBlendT.
+    await page.waitForFunction((n) => window.__frames > n, await page.evaluate(() => window.__frames + 4), { timeout: 30000 });
+    const info = await page.evaluate(() => {
+      const rig = window.__debug.player.character;
+      if (rig.isPlaceholder) return 'placeholder';
+      const bone = rig.root.getObjectByName('Torso');
+      const rest = rig.pose?._rest?.Torso;
+      if (!bone || !rest) return null;
+      return { mounted: window.__debug.player.mounted, now: bone.quaternion.toArray(), rest: rest.toArray() };
+    });
+    if (info === 'placeholder') return null; // the placeholder releases its own pose in update()
+    if (!info) return 'Torso bone or its captured rest rotation is missing';
+    if (info.mounted !== false) return 'expected the player dismounted from the previous check';
+    const drift = Math.max(...info.rest.map((v, i) => Math.abs(v - info.now[i])));
+    return drift < 0.02 ? null : `Torso is still ${drift.toFixed(3)} from its rest rotation after dismounting — the riding pose was not released`;
   }],
   ['horse collider is registered exactly once, even after a mount/dismount cycle', async () => {
     const count = await page.evaluate(async () => {

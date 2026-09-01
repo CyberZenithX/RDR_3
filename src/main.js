@@ -11,6 +11,7 @@ import { createPlayerCharacter } from './character.js';
 import { Player } from './player.js';
 import { createHorseCharacter } from './horse-character.js';
 import { Horse } from './horse.js';
+import { Reins } from './reins.js';
 import { ThirdPersonCamera } from './camera.js';
 import { initInput, onPointerLockChanged } from './input.js';
 import { initUI } from './ui.js';
@@ -63,7 +64,11 @@ async function init() {
   window.__debug.modelsLoaded.horse = !horseCharacter.isPlaceholder;
   scene.add(horseCharacter.root);
   const horse = new Horse(horseCharacter, world);
+  // Spans both skeletons, so it is built after both and updated after both —
+  // see reins.js for why it is not parented into either one.
+  const reins = new Reins(scene, horseCharacter, character);
   window.__debug.horse = horse; // debug hook, not read by gameplay code
+  window.__debug.reins = reins; // debug hook, not read by gameplay code
 
   initInput(renderer.domElement);
   onPointerLockChanged((locked) => ui.setPointerLocked(locked));
@@ -81,11 +86,16 @@ async function init() {
     // player.mounted via player.mount()/dismount() — see horse.js's header.
     horse.update(dt, tpCamera, player);
     if (player.mounted) {
-      const saddle = horse.getSaddleTransform(_scratchSaddlePos);
-      player.position.copy(saddle.position);
-      player.meshYaw = saddle.yaw;
+      // Read player.mounted fresh, *after* horse.update() — a same-frame
+      // dismount already wrote the drop-off position and must not be
+      // overwritten by a stale saddle sync. See CLAUDE.md.
+      player.setSaddle(horse.getSaddleTransform(_scratchSaddlePos));
     }
     player.update(dt, tpCamera);
+
+    // After both rigs have been posed for this frame, so the straps land on
+    // this frame's mouth and fists rather than last frame's.
+    reins.update(player.mounted);
 
     tpCamera.setMounted(player.mounted);
     ui.setMounted(player.mounted);
