@@ -23,7 +23,11 @@
 import * as THREE from 'three';
 import { loadGLTF, findClip, measureHeight, enableShadows } from './assets.js';
 import { PlaceholderHuman } from './placeholder-human.js';
+import { RidingPose } from './riding-pose.js';
 import { PLAYER, ANIM, CLIP_REFERENCE_SPEED, CLIP_CANDIDATES } from './config.js';
+
+const _hipWorld = new THREE.Vector3();
+const _rootWorld = new THREE.Vector3();
 
 class PlayerCharacterRig {
   constructor(gltf) {
@@ -56,6 +60,38 @@ class PlayerCharacterRig {
     this._active = null;
     this._activeName = null;
     this._activate(this.actions.idle ? 'idle' : 'walk');
+
+    // Baseline captured before the mixer has ever run, so it is the GLB's own
+    // authored rest pose. See riding-pose.js.
+    this.pose = new RidingPose(this.root);
+    this.pose.captureBaseline();
+    this._ridingWeight = 0;
+    this._ridingSway = 0;
+
+    // How high the pelvis rides above the rig's own origin. horse.js's saddle
+    // offset is a *seat* height, so player.js places the root this far below it
+    // — a seated rider is positioned by their hips, not by feet they aren't
+    // standing on. Measured off the live rig so a model swap re-derives it.
+    this.hipHeight = this._measureHipHeight();
+  }
+
+  _measureHipHeight() {
+    const hip = this.root.getObjectByName('Body') ?? this.root.getObjectByName('Hips');
+    if (!hip) return PLAYER.modelHeight * 0.45; // sane fraction of stature if this rig names its pelvis something else
+    this.root.updateMatrixWorld(true);
+    hip.getWorldPosition(_hipWorld);
+    this.root.getWorldPosition(_rootWorld);
+    return _hipWorld.y - _rootWorld.y;
+  }
+
+  /**
+   * @param {number} weight 0..1 — how much of the seated pose to blend in.
+   * @param {number} sway   -1..1 — the horse's live gait bob, so the rider's
+   *   hands and torso move with the stride. See riding-pose.js.
+   */
+  setRidingPose(weight, sway = 0) {
+    this._ridingWeight = weight;
+    this._ridingSway = sway;
   }
 
   /**
@@ -99,6 +135,11 @@ class PlayerCharacterRig {
 
   update(dt) {
     this.mixer.update(dt);
+    // Strictly after the mixer: the seated pose works by overwriting the bones
+    // the still-playing idle clip just wrote. Called unconditionally, including
+    // at weight 0 — that is how the pose knows to let go of the bones no clip
+    // will reclaim on its own. See riding-pose.js.
+    this.pose.apply(this._ridingWeight, this._ridingSway);
   }
 }
 

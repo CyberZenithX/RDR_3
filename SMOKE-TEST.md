@@ -148,3 +148,43 @@ Controls added this round: **H** whistle the horse, **E** mount/dismount
     map edge; same impassable-ridge/hard-clamp behavior as on foot.
 12. No console errors through a whistle → mount → ride around → gallop →
     dismount cycle, repeated a few times.
+
+## Round 2b — the seated riding pose
+
+Added after round 2, when the rider turned out to be *standing* on the horse
+rather than sitting on it. Everything under "Round 2" still applies; these are
+the extra things to look at.
+
+1. **The rider sits.** Mounted, from any angle: legs astride the barrel with
+   knees forward and the shins hanging down either side, boots roughly level
+   with the horse's elbow, hips on the horse's back rather than buried in it
+   or hovering above it. No leg should pass visibly *through* the horse.
+2. **Hands are on the reins**, not open palms held out: closed fists, forward
+   and slightly apart above the withers, elbows near the ribs. Look at this
+   from three-quarter-front, where the hands are clearest.
+3. **Left and right legs match.** This rig's legs are *not* mirror images of
+   each other at rest (the right hip sits further forward than the left), and
+   the pose corrects for it with per-side trims. If one leg sits noticeably
+   further forward, higher, or tighter to the horse than the other, those
+   trims (`RIDING_POSE.rightPitchTrim` / `rightSpreadTrim` / `rightKneeTrim`
+   in `config-horse.js`) are what to adjust.
+4. **The rider moves with the horse, not on top of it.** The seat follows the
+   horse's own spine bone, so the rider should rise and fall in time with the
+   gait — subtle at a walk, pronounced at a gallop — and never look like a
+   figure sliding along above a separately-bouncing animal. The rein hands
+   and torso give slightly with each stride.
+5. **The rider leans.** Into turns (sharing the horse's own bank), and forward
+   as the horse builds to a gallop, easing back upright as it slows.
+6. **Mounting eases into the seat.** Over the 0.4s mount blend the rider
+   should fold from standing into seated as they move onto the horse — no
+   snap into the pose, and no moment where they sink into the ground at the
+   start of it.
+7. **Dismounting stands them back up properly.** Get off and then *stand
+   still* without walking: the rider should be fully upright immediately. If
+   they stand there with a forward lean that only straightens out once you
+   walk, the pose is not being released (this was a real bug — the spine bone
+   is not in the idle clip, so nothing else puts it back).
+8. **Ride, dismount, and ride again several times.** The pose is rebuilt from
+   a fixed rest pose every frame; if the rider slowly folds over, drifts, or
+   looks progressively more wrong the longer you ride, that is the pose
+   compounding on itself and is a real regression.

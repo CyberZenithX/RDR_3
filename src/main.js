@@ -81,9 +81,10 @@ async function init() {
     // player.mounted via player.mount()/dismount() — see horse.js's header.
     horse.update(dt, tpCamera, player);
     if (player.mounted) {
-      const saddle = horse.getSaddleTransform(_scratchSaddlePos);
-      player.position.copy(saddle.position);
-      player.meshYaw = saddle.yaw;
+      // Read player.mounted fresh, *after* horse.update() — a same-frame
+      // dismount already wrote the drop-off position and must not be
+      // overwritten by a stale saddle sync. See CLAUDE.md.
+      player.setSaddle(horse.getSaddleTransform(_scratchSaddlePos));
     }
     player.update(dt, tpCamera);
 

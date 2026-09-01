@@ -85,10 +85,56 @@ export class Horse {
     this._diff = new THREE.Vector3();
     this._saddlePos = new THREE.Vector3();
     this._saddleLocal = new THREE.Vector3();
+    this._boneWorld = new THREE.Vector3();
     this._up = new THREE.Vector3(0, 1, 0);
+
+    // The rider rides the horse's own spine bone, not a fixed height: the back
+    // travels 0.15 through a gallop cycle and sits at a different average
+    // height per gait, so any constant offset floats at one gait and sinks at
+    // another (measured — see config-horse.js's saddleBone comment). Absent on
+    // the procedural fallback horse, which has no skeleton; `saddleBob` then
+    // stays 0 and the fixed offset alone applies.
+    this._saddleBone = character.root.getObjectByName(HORSE.saddleBone) ?? null;
+    this._saddleBoneRestY = 0;
+    this.saddleBob = 0; // metres the seat is currently above/below its rest height
+    this.saddleSway = 0; // the same, normalised to -1..1 for animation to key off
+    this.riderPitch = 0; // radians the rider leans forward, eased in with speed
 
     character.root.position.copy(this.position);
     character.root.rotation.y = this.yaw + HORSE.meshYawOffset;
+
+    // Rest height of the saddle bone, measured against the mesh root rather
+    // than the horse's logical position — the two are equal in play, but the
+    // root must already be placed for the reading to mean anything.
+    if (this._saddleBone) {
+      character.root.updateMatrixWorld(true);
+      this._saddleBoneRestY = this._boneHeightAboveRoot();
+    }
+  }
+
+  /** Saddle bone's height above the horse mesh's own root, in world units. */
+  _boneHeightAboveRoot() {
+    this._saddleBone.getWorldPosition(this._boneWorld);
+    return this._boneWorld.y - this.character.root.position.y;
+  }
+
+  /**
+   * Reads how far the horse's back has risen or fallen this frame. Called after
+   * the horse's own mixer has advanced and its transform is written, so the
+   * value is exactly in phase with the gait actually on screen — no guessed
+   * sine wave, and it stays in phase automatically when the clip's timeScale
+   * changes with speed.
+   */
+  _sampleSaddleBob() {
+    if (!this._saddleBone) {
+      this.saddleBob = 0;
+      this.saddleSway = 0;
+      return;
+    }
+    this.character.root.updateMatrixWorld(true);
+    const raw = this._boneHeightAboveRoot() - this._saddleBoneRestY;
+    this.saddleBob = THREE.MathUtils.clamp(raw * HORSE.saddleFollow, -HORSE.saddleBobLimit, HORSE.saddleBobLimit);
+    this.saddleSway = THREE.MathUtils.clamp(raw / HORSE.saddleBobLimit, -1, 1);
   }
 
   /** Called on an H-key press (edge-detected here, not by the caller). */
@@ -141,6 +187,16 @@ export class Horse {
     this.character.root.position.copy(this.position);
     this.character.root.rotation.y = this.yaw + HORSE.meshYawOffset;
     this.character.root.rotation.z = this.lean;
+
+    // After the transform above, so the bone sample reflects this frame's pose
+    // rather than last frame's.
+    this._sampleSaddleBob();
+
+    // How far forward the rider carries themselves — eased rather than snapped,
+    // so breaking into a gallop leans them in over a few frames.
+    const gallopFraction = THREE.MathUtils.clamp(this.speed / HORSE.gallopSpeed, 0, 1);
+    this.riderPitch += (gallopFraction * HORSE.riderGallopPitch - this.riderPitch)
+      * (1 - Math.exp(-HORSE.riderPitchRate * dt));
   }
 
   /** Reads WASD relative to the camera, exactly like player.js, and steers the horse as a vehicle. */
@@ -282,22 +338,35 @@ export class Horse {
   }
 
   /**
-   * World-space {position, yaw} for the rider this frame. During the
-   * post-mount blend window this eases from wherever the player stood at
-   * mount time onto the true saddle point, per BUILD-PLAN.md's "lerp onto
-   * the saddle point over 0.4s, no clip" fake for Mount/Dismount.
+   * Everything the rider needs to sit on this horse this frame: where their
+   * hips go, which way they face, and how the body underneath them is moving.
+   * During the post-mount blend window position and yaw ease from wherever the
+   * player stood at mount time onto the true saddle point, per BUILD-PLAN.md's
+   * "lerp onto the saddle point over 0.4s, no clip" fake for Mount/Dismount —
+   * and `blend` hands that same 0..1 curve to the seated pose so the rider
+   * folds into the saddle over the ride up instead of snapping into it.
+   *
+   * `position.y` is the seat height (where the rider's *hips* belong), not
+   * ground level — player.js drops the rig's own measured hip height off it.
    */
   getSaddleTransform(outPos) {
     this._saddleLocal.set(HORSE.saddleOffset.x, 0, HORSE.saddleOffset.z).applyAxisAngle(this._up, this.yaw);
     this._saddlePos.set(
       this.position.x + this._saddleLocal.x,
-      this.position.y + HORSE.saddleOffset.y,
+      this.position.y + HORSE.saddleOffset.y + this.saddleBob,
       this.position.z + this._saddleLocal.z,
     );
 
     const t = smoothstep(0, HORSE.mountLerpTime, this._mountBlendT);
     outPos.lerpVectors(this._premountPos, this._saddlePos, t);
     const yaw = lerpAngle(this._premountYaw, this.yaw, t);
-    return { position: outPos, yaw };
+    return {
+      position: outPos,
+      yaw,
+      blend: t,
+      roll: this.lean * HORSE.riderLean * t,
+      pitch: this.riderPitch * t,
+      sway: this.saddleSway * HORSE.riderBobSway,
+    };
   }
 }

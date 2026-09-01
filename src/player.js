@@ -49,6 +49,12 @@ export class Player {
     this.animState = 'idle';
     this.boundaryProximity = 0; // 0..1, for the UI edge-of-map fade
     this.mounted = false; // true while riding the horse — see mount()/dismount() and horse.js
+    // Ride state, written by setSaddle() each mounted frame (see horse.js's
+    // getSaddleTransform) and read by update()'s mounted branch.
+    this.rideBlend = 0;
+    this.rideRoll = 0;
+    this.ridePitch = 0;
+    this.rideSway = 0;
 
     this._coyoteTimer = 0;
     this._jumpBufferTimer = 0;
@@ -70,6 +76,26 @@ export class Player {
     this.mounted = true;
   }
 
+  /**
+   * Takes this frame's saddle transform from horse.getSaddleTransform(). The
+   * saddle's `y` is a *seat* height — where the rider's hips belong — so the
+   * rig's own measured hip height comes off it: a seated rider is placed by
+   * their pelvis, not by feet that aren't carrying them.
+   */
+  setSaddle(saddle) {
+    this.position.copy(saddle.position);
+    // Scaled by the mount blend, not applied outright: the blend runs from
+    // where the player stood on the ground to the seat, and taking a whole hip
+    // height off at t=0 would drop them through the terrain for the first
+    // frame of it. At t=1 this is the full offset, which is what seats them.
+    this.position.y -= (this.character.hipHeight ?? 0) * saddle.blend;
+    this.meshYaw = saddle.yaw;
+    this.rideBlend = saddle.blend;
+    this.rideRoll = saddle.roll;
+    this.ridePitch = saddle.pitch;
+    this.rideSway = saddle.sway;
+  }
+
   /** Called by horse.js on dismount, with a ground-level drop-off point already resolved. */
   dismount(x, y, z, yaw) {
     this.mounted = false;
@@ -78,19 +104,37 @@ export class Player {
     this.velocityXZ.set(0, 0, 0);
     this.velocityY = 0;
     this.grounded = true;
+    this.rideBlend = 0;
+    this.rideRoll = 0;
+    this.ridePitch = 0;
+    this.rideSway = 0;
+    this.character.setRidingPose(0, 0);
+    this.character.root.rotation.set(0, this.meshYaw + PLAYER.meshYawOffset, 0);
   }
 
   update(dt, camera) {
     if (this.mounted) {
       // Position/meshYaw are already set by main.js from horse.getSaddleTransform()
-      // this frame — this just keeps the visual rig and a resting animation in sync.
+      // this frame — this just keeps the visual rig in sync and poses it into
+      // the saddle. The idle clip keeps playing underneath; riding-pose.js
+      // overwrites the bones it writes, every frame, after the mixer runs.
       this.speed = 0;
       this.boundaryProximity = 0;
       this.character.setLocomotion('idle', 0);
       this.character.setAirborne(false);
+      this.character.setRidingPose(this.rideBlend, this.rideSway);
       this.character.update(dt);
       this.character.root.position.copy(this.position);
-      this.character.root.rotation.y = this.meshYaw + PLAYER.meshYawOffset;
+      // YXZ so roll is applied about the rider's own forward axis and pitch
+      // about their own right axis, whichever way they happen to be facing —
+      // with the default XYZ order both would be taken about world axes and
+      // the lean would swing wrongly as the horse turns.
+      this.character.root.rotation.order = 'YXZ';
+      this.character.root.rotation.set(
+        this.ridePitch,
+        this.meshYaw + PLAYER.meshYawOffset,
+        this.rideRoll,
+      );
       return;
     }
 
