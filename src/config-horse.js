@@ -153,6 +153,43 @@ export const RIDING_POSE = {
   swayThigh: 0.05, // legs absorb a little of the motion the seat doesn't
 };
 
+/**
+ * The bridle and reins (src/reins.js). Every head measurement is expressed in
+ * the horse's *own head frame* — `forward` toward the muzzle, `up` toward the
+ * ears, `side` across them — because that frame is rebuilt from the ear and
+ * head bones each frame and so stays right through every head movement.
+ *
+ * The numbers come from raycasting the animated head: the muzzle reaches 0.50
+ * forward of the head bone and about 0.20 below it, and is roughly 0.17 wide
+ * and 0.30 deep where the noseband sits.
+ */
+export const TACK = {
+  color: 0x2b1d13, // dark oiled leather
+
+  bitForward: 0.44, // where the rein leaves the mouth, along the head's forward axis
+  bitUp: -0.2,
+  bitHalfWidth: 0.11,
+
+  nosebandForward: 0.3,
+  nosebandUp: -0.12,
+  nosebandHalfWidth: 0.15,
+  nosebandHalfHeight: 0.18,
+
+  crownForward: -0.03, // the strap over the poll, just in front of the ears
+  crownUp: 0.05,
+  crownHalfWidth: 0.13,
+
+  strapRadius: 0.012,
+  reinRadius: 0.014,
+  reinSag: 0.1, // droop as a fraction of the span — leather, not wire
+  reinDrapeSag: 0.16, // reins lie slacker when nobody is holding them
+  neckDrapeSide: 0.12, // how far to either side of the neck they rest when unmounted
+  // How far above the neck bone the reins are held clear. Without this the
+  // straight run from bit to hands cuts through the crest of the neck whenever
+  // the horse lowers its head, which it does hard at a gallop.
+  neckClearance: 0.28,
+};
+
 /** Proportions for the procedural quadruped stand-in used if horse.glb fails to load. */
 export const PLACEHOLDER_HORSE = {
   bodyRadius: 0.42,

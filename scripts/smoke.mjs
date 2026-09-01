@@ -398,6 +398,54 @@ const CHECKS = [
     if (info.mounted !== true) return `expected player still mounted from the previous check (mounted=${info.mounted})`;
     return info.dist > info.min + 1 ? null : `mounted camera currentDistance is ${info.dist.toFixed(2)}, close to minDistance (${info.min}) — expected near mountedDistance (${info.target})`;
   }],
+  ['reins connect the rider\'s hands to the horse\'s mouth', async () => {
+    // The rider's fists held nothing until the tack existed (horse.glb ships no
+    // bridle). Both ends are checked against live bones: the bit end near the
+    // muzzle, the hand end at the fist. Reads the strand buffer directly, since
+    // the straps are one shared geometry rewritten each frame rather than
+    // objects with their own transforms.
+    const info = await page.evaluate(() => {
+      const d = window.__debug;
+      const reins = d.reins;
+      if (!reins?.available) return { available: false };
+      const pos = reins.geometry.getAttribute('position');
+      const RING = 13, SIDES = 4, PER = RING * SIDES;
+      // Average of a ring's four vertices is the curve point it was built around.
+      const ringAt = (strand, ring) => {
+        let x = 0, y = 0, z = 0;
+        for (let s = 0; s < SIDES; s++) {
+          const v = strand * PER + ring * SIDES + s;
+          x += pos.getX(v); y += pos.getY(v); z += pos.getZ(v);
+        }
+        return { x: x / SIDES, y: y / SIDES, z: z / SIDES };
+      };
+      const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+      const V = d.horse.position.constructor;
+      const headBone = d.horse.character.root.getObjectByName('Head');
+      const head = headBone.getWorldPosition(new V());
+      const hand = reins.handR?.getWorldPosition(new V()) ?? null;
+      const bitEnd = ringAt(1, 0);           // reinR, bit end
+      const handEnd = ringAt(1, RING - 1);   // reinR, hand end
+      return {
+        available: true,
+        mounted: d.player.mounted,
+        bitToHead: dist(bitEnd, head),
+        handGap: hand ? dist(handEnd, hand) : null,
+        strapCount: pos.count / PER,
+      };
+    });
+    if (!info.available) return null; // placeholder horse has no skeleton to hang tack on
+    if (info.mounted !== true) return 'expected the player still mounted from the previous check';
+    if (info.strapCount < 6) return `only ${info.strapCount} straps in the tack buffer, expected 6 (2 reins + bridle)`;
+    // The bit sits on the muzzle, roughly half a head forward of the head bone.
+    if (!(info.bitToHead > 0.15 && info.bitToHead < 0.9)) {
+      return `rein's bit end is ${info.bitToHead.toFixed(2)} from the head bone — not on the muzzle`;
+    }
+    if (!(info.handGap !== null && info.handGap < 0.1)) {
+      return `rein's other end is ${info.handGap?.toFixed(2)} from the rider's hand — the hands are holding air again`;
+    }
+    return null;
+  }],
   ['dismount releases the player back onto the terrain', async () => {
     const result = await page.evaluate(async () => {
       const cfg = await import('/src/config.js');

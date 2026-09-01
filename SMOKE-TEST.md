@@ -188,3 +188,28 @@ the extra things to look at.
    a fixed rest pose every frame; if the rider slowly folds over, drifts, or
    looks progressively more wrong the longer you ride, that is the pose
    compounding on itself and is a real regression.
+
+## Round 2b (cont.) — bridle and reins
+
+`horse.glb` ships no tack at all, so the bridle and reins are built at runtime
+(`src/reins.js`). Things to look at:
+
+1. **The reins actually connect.** Mounted, the two straps should run from the
+   rider's closed fists forward to the corners of the horse's mouth, passing
+   *over* the neck. Look from three-quarter-front, and again while turning.
+2. **They stay attached when the head moves.** Gallop, and watch the head
+   stretch forward and drop: the bit end should stay on the muzzle, not slide
+   off the nose or float in front of it. Same when the horse lowers its head.
+3. **They lie over the neck, never through it.** The crest of the neck is the
+   place to watch, especially at a gallop with the head low — if a rein
+   disappears into the neck and comes out the other side, the clearance
+   (`TACK.neckClearance`) is too small.
+4. **The bridle sits on the head**: a noseband around the muzzle, a strap up
+   each cheek, and a browband in front of the ears. It should move with the
+   head as one piece, with no strap floating off the face.
+5. **Unmounted, the reins drape over the neck** rather than stretching across
+   the map toward wherever the player is standing. Dismount and walk away —
+   the reins should stay on the horse.
+6. **No flicker.** The straps are one continuously rewritten mesh; if they
+   vanish at certain camera angles or distances that is a culling problem,
+   not a placement one.
