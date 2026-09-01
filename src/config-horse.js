@@ -133,12 +133,12 @@ export const HORSE = {
   saddleDriftLimit: 1.4,
 
   // The size of the tank, in the same units the rates below are per-second in.
-  // Raised from 1 to 1.5 on the human's call after a play session: a gallop now
-  // runs 6.8s from full instead of 4.55s, and a full refill takes 11.5s instead
-  // of 7.7s. This is NOT a 0..1 fraction — the stamina bar takes
+  // Briefly raised to 1.5 and then put back to 1 on the human's call: a gallop
+  // runs 4.55s from full and a full refill takes 7.7s. This is still NOT
+  // assumed to be a 0..1 fraction anywhere — the stamina bar takes
   // `horse.staminaFraction`, not `horse.stamina`, precisely so this number can
-  // move without the UI needing to know.
-  staminaMax: 1.5,
+  // move without the UI needing to know, and that stays true at 1.
+  staminaMax: 1,
   staminaDrainRate: 0.22, // per second at a gallop
   staminaRegenRate: 0.13, // per second at anything less than a gallop
   // Both thresholds are absolute, not fractions of the tank, and were left

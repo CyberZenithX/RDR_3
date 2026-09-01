@@ -361,3 +361,19 @@ Root cause and measurements:
 4. **Jumping costs proportionally less of the bar now** (`jumpStaminaCost` is
    absolute and the tank got bigger). If jump-spamming feels too cheap, that
    constant is the lever.
+
+## Stamina — the tank was put back
+
+`HORSE.staminaMax` went back from 1.5 to 1 on the human's call, reversing the
+resize above. Items 1 and 4 of that section no longer apply; 2 and 3 still do.
+
+1. **A gallop should last about 4.55s from full again**, and a full refill
+   about 7.7s. If that now reads as too short, `staminaMax` is the lever and
+   moving it is safe — nothing outside `horse.js` assumes the tank is 1.
+2. **The bar should still fill its track exactly at rest and empty at a dead
+   stop.** Raw stamina and the fraction are the same number at a tank of 1, so
+   a regression on that path would be invisible in play until the tank moves
+   again; the smoke check resizes the tank itself to keep catching it.
+3. **A jump costs 0.1 of the bar again** — about 10% rather than the ~6.7% it
+   cost at 1.5. If jump-spamming now feels punishing, `jumpStaminaCost` is the
+   lever, not the tank.

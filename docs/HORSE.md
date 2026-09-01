@@ -424,18 +424,21 @@ All dimensions live in `TACK` in `config-horse.js`, in the horse's head frame.
 - `_updateMounted` — WASD relative to the camera (`getForward()`/`getRight()`),
   gallop gated by stamina.
 
-**`HORSE.staminaMax` is 1.5, not 1.** It was raised on the human's call after a
-play session: a gallop runs **6.8s** from full (was 4.55s) and a full refill
-takes **11.5s** (was 7.7s). The two exhaustion thresholds were deliberately
-left absolute, so the post-exhaustion lockout stays ~1.7s however big the tank
-gets rather than the punishment scaling with the buff. `jumpStaminaCost` is
-absolute too, so a jump now costs proportionally less of the bar.
+**`HORSE.staminaMax` is 1, but nothing may assume that.** It was raised to 1.5
+after a play session and then put back to 1 on the human's call, so the tank is
+a lever that has already moved twice: a gallop runs **4.55s** from full and a
+full refill takes **7.7s** (at 1.5 those were 6.8s and 11.5s). The two
+exhaustion thresholds and `jumpStaminaCost` are absolute rather than fractions
+of the tank, so resizing it does not scale the ~1.7s post-exhaustion lockout or
+the cost of a jump.
 
-**Nothing outside `horse.js` may assume the tank is 1.** `ui.js` is generic and
-documents its argument as a 0..1 fraction, so `main.js` hands it
-`horse.staminaFraction`, not `horse.stamina` — passing the raw value rendered
-the bar at 150% width, which is what happened on the first cut of this change
-and is now guarded by a smoke check that reads the bar's rendered width.
+**Nothing outside `horse.js` may assume the tank is 1**, even now that it is.
+`ui.js` is generic and documents its argument as a 0..1 fraction, so `main.js`
+hands it `horse.staminaFraction`, not `horse.stamina` — passing the raw value
+rendered the bar at 150% width when the tank was 1.5, and is guarded by a smoke
+check that reads the bar's rendered width. Because raw and fraction are the
+same number at a tank of 1, that check resizes the tank itself for one frame
+rather than trusting the current value to expose the bug.
 
 Stamina drains only while galloping and gates whether a gallop request is
 honoured. `staminaExhausted` is **not** the same signal as "currently
@@ -463,7 +466,7 @@ real bugs twice (rounds 2b and 2c both started as "this looks wrong in play").
 |---|---|---|
 | Horse AI feel | twitchy / sluggish / orbits too tight | `HORSE.wanderRadius`, `wanderIntervalMin/Max`, `followTriggerDistance`, `followSettleDistance` |
 | Lean into turns | leans the wrong way, or not at all | sign on `-yawRate * HORSE.leanFactor` in `_turnToward()`, then `leanMax` |
-| Stamina | gallop too short/long, recovery unclear | `staminaMax` (the tank, 1.5), `staminaDrainRate`, `staminaRegenRate`, `staminaExhaustedFloor`, `staminaExhaustedRecover` |
+| Stamina | gallop too short/long, recovery unclear | `staminaMax` (the tank, 1), `staminaDrainRate`, `staminaRegenRate`, `staminaExhaustedFloor`, `staminaExhaustedRecover` |
 | Riding pose in motion | bob amplitude, forward carriage at speed | `HORSE.saddleFollow`, `riderLean`, `riderGallopPitch`, `riderBobSway`, `RIDING_POSE.sway*` |
 | Jump feel | arc, 0.89s hang, pitch, camera lag | `jumpSpeed`, `gravity`, `jumpPitch*`, `jumpPoseBlendRate`, `jumpSeatRise`, `riderJumpFollow`, `RIDING_POSE.jump*`, `CAMERA.pivotFollowRate` |
 | Horse's own height over a jump | the clip's 0.75 body rise stacks on the 1.51 arc, unjudged | `jumpSpeed`; or cancel the clip's rise rather than following it (a design change, see above) |

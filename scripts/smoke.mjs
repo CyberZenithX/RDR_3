@@ -928,20 +928,36 @@ const CHECKS = [
     return info.stamina >= 0 && info.stamina <= info.max ? null : `horse.stamina is ${info.stamina}, expected within [0, ${info.max}]`;
   }],
   ['the stamina bar is fed a fraction, not raw stamina', async () => {
-    // HORSE.staminaMax is not 1 and is expected to keep moving as the ride is
-    // tuned, but ui.js is generic and documents its argument as 0..1. Reading
-    // the width the bar is actually rendering at catches the whole path —
-    // horse.staminaFraction, main.js's call, and the CSS — rather than just the
-    // getter's arithmetic. At staminaMax 1.5 the raw value would render 150%.
+    // ui.js is generic and documents its argument as 0..1, but HORSE.staminaMax
+    // is a tuning lever that has already moved twice (1 -> 1.5 -> 1). At a tank
+    // of exactly 1 the raw value and the fraction are the same number, so the
+    // check would have no teeth if it just read the bar as it stands: it
+    // temporarily resizes the tank, fills it, and renders a frame, so the two
+    // paths give different widths whatever the tank is set to. Reading the
+    // width the bar actually ends up at covers the whole chain —
+    // horse.staminaFraction, main.js's call, and the CSS — rather than just
+    // the getter's arithmetic. On the raw-stamina path this renders at 150%.
     const info = await page.evaluate(async () => {
       const cfg = await import('/src/config-horse.js');
       const h = window.__debug?.horse;
-      return {
-        fraction: h?.staminaFraction,
-        stamina: h?.stamina,
-        max: cfg.HORSE.staminaMax,
-        width: document.getElementById('staminaFill')?.style?.width ?? null,
-      };
+      const restoreMax = cfg.HORSE.staminaMax;
+      const restoreStamina = h?.stamina;
+      try {
+        cfg.HORSE.staminaMax = restoreMax * 1.5;
+        if (h) h.stamina = cfg.HORSE.staminaMax;
+        // Two frames: one for the loop to consume the new values, one to be
+        // sure the style landed. Headless runs at ~3fps, so this is ~0.7s.
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        return {
+          fraction: h?.staminaFraction,
+          stamina: h?.stamina,
+          max: cfg.HORSE.staminaMax,
+          width: document.getElementById('staminaFill')?.style?.width ?? null,
+        };
+      } finally {
+        cfg.HORSE.staminaMax = restoreMax;
+        if (h) h.stamina = restoreStamina;
+      }
     });
     if (typeof info.fraction !== 'number') return `horse.staminaFraction missing (${info.fraction})`;
     if (info.fraction < 0 || info.fraction > 1) {

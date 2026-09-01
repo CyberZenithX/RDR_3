@@ -233,8 +233,8 @@ click anywhere means "start playing."
 boundary-warning opacity, stamina bar visibility (`setMounted(bool)`) and
 fill/exhausted color (`updateStamina(fraction, exhausted)` — a **0..1
 fraction**, so `main.js` passes `horse.staminaFraction`; `HORSE.staminaMax` is
-1.5 and this module is not allowed to know that). All markup lives
-in `index.html`.
+1 today, has been 1.5, and this module is not allowed to know either way). All
+markup lives in `index.html`.
 
 `src/config.js` — every tunable **except the horse's own**, grouped by system:
 `RENDER`, `COLORS`, `SKY`, `SUN`, `FOG`, `WORLD`, `TERRAIN`, `TOWN`,

@@ -139,8 +139,11 @@ Pick a bone no clip translates, or measure a large angle instead.
 - the horse's collider is registered **exactly once**, even across a
   mount/dismount cycle
 - stamina stays in `[0, staminaMax]`, and the **stamina bar's rendered width**
-  is a 0..1 fraction of its track. `staminaMax` is 1.5, so passing the raw
-  value renders the bar at 150% — confirmed to fail that way before the fix.
+  is a 0..1 fraction of its track. Passing the raw value renders the bar at
+  150% — confirmed to fail that way before the fix, when `staminaMax` was 1.5.
+  The tank is back to 1, where raw and fraction are the same number, so the
+  check now resizes and fills the tank itself for one frame and restores it
+  afterwards; without that it would silently pass on the buggy path.
 
 **Round 2b — the seated pose**
 
