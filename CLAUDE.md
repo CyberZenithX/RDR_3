@@ -20,6 +20,7 @@ open a file, and points at `docs/` for everything else.
 | which file owns what, collision, config, `__debug` | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 | `scripts/smoke.mjs`, verification, screenshots | [`docs/TESTING.md`](docs/TESTING.md) |
 | why something odd-looking is the way it is | [`docs/DECISIONS.md`](docs/DECISIONS.md) |
+| guns, aiming, the shot, targets, effects, audio | [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-023..026, then [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)'s Combat section |
 | a bug that smells familiar | [`docs/DEVELOPMENT-NOTES.md`](docs/DEVELOPMENT-NOTES.md) |
 | models, licences, scaling, what can't be fetched | [`docs/ASSETS.md`](docs/ASSETS.md) |
 | what the round you're starting must watch out for | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
@@ -37,16 +38,19 @@ open a file, and points at `docs/` for everything else.
 | 2b — seated riding pose | **done** | |
 | 2c — rider stays seated through a turn | **done** | |
 | 2d — horse jump (Space, while mounted) | **done** | |
-| 3 — guns | not started | |
+| 3 — guns | **done** | `round-3` |
 | 4 — bandits | not started | |
 | 5 — town | not started | |
 | 6 — bounties, duels, wanted | not started | |
 | 7 — polish | not started | |
 
-**Next round: 3 — guns.** Read [`docs/ROADMAP.md`](docs/ROADMAP.md) before you
-start; it has 13 specific things this codebase will do to you, including the
-fact that Space is already bound to the horse jump and that the riding pose
-owns the arms every frame.
+**Next round: 4 — bandits.** Read [`docs/ROADMAP.md`](docs/ROADMAP.md) before
+you start. Most of what a bandit needs was built generically in round 3 and is
+waiting to be reused — the revolver attaches to any skeleton, `combat-ray.js`
+is the line-of-sight query, the effects and audio are global pools. The three
+things that are genuinely new: **nothing in the game has health yet**,
+`Combat` currently assumes a player and a camera, and colliders can now be
+*removed* at runtime.
 
 ---
 
@@ -60,7 +64,8 @@ One line per file. Long form in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `vendor/three/` | three.js **0.160.0**, vendored as committed files: the 3 modules we import, plus `LICENSE`. |
 | `src/main.js` | Entry point. Renderer/scene setup, load sequence, the animation loop, `window.__debug`. **Frame order is load-bearing** — see below. |
 | `src/config.js` | Every tunable except the horse's. |
-| `src/config-horse.js` | Every horse tunable: `HORSE`, `HORSE_ANIM`, `RIDING_POSE`, `TACK`, `PLACEHOLDER_HORSE`, clip candidates. |
+| `src/config-horse.js` | Every horse tunable: `HORSE`, `HORSE_ANIM`, `RIDING_POSE`, `TACK`, `PLACEHOLDER_HORSE`, clip candidates — **plus** the mounted/airborne accuracy penalties and the aiming steer rates. |
+| `src/config-combat.js` | Every gun tunable: `GUN`, `COMBAT`, `AIM_POSE`, `VFX`, `TARGETS`, `AUDIO`. |
 | `src/noise.js` | Seeded PRNG + simplex + fbm + smoothstep. No internal deps. |
 | `src/terrain.js` | `heightAt` / `normalAt` / `buildTerrain` / `groundHeightAt`. |
 | `src/sky.js` | Sky dome shader, sun + hemisphere light, fog, shadow follow. |
@@ -74,10 +79,18 @@ One line per file. Long form in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `src/placeholder-human.js` | Procedural fallback rig for the player. |
 | `src/placeholder-horse.js` | Procedural fallback rig for the horse. |
 | `src/player.js` | Movement, jump, gravity, grounding, collision, locomotion state — plus the mounted branch. |
-| `src/horse.js` | Everything **horizontal**: AI, steering, lean, stamina, collider, mount toggle. |
+| `src/horse.js` | Everything **horizontal**: steering (normal *and* aiming), lean, stamina, collider, mount toggle. |
+| `src/horse-ai.js` | The unmounted wander/follow/whistle brain. Decides a heading and a speed; `horse.js` integrates them. |
 | `src/horse-jump.js` | Everything **vertical**: the arc, the pitch, `clearance()`. |
 | `src/horse-seat.js` | Where the rider sits: spine sampling (`bob`/`sway`/`drift`), the banked seat point. |
 | `src/riding-pose.js` | The hand-authored seated pose, bone by bone. Also the finger-grip axes. |
+| `src/aim-pose.js` | The hand-authored **aiming** pose: right arm, `Chest`, `Head`, recoil, the reload dip. Runs after the riding pose and claims a disjoint bone set — that split *is* the mounted-shooting blend. |
+| `src/weapons.js` | The procedural revolver, its hand-bone attachment, and the muzzle empty every shot starts from. Generic across skeletons. |
+| `src/combat.js` | Aim / fire / reload / ammo / spread / recoil. Its frame is **split in two** around the rest of the world. |
+| `src/combat-ray.js` | What a bullet hits: cylinders for colliders, a marched heightfield for the ground. No mesh raycasts. |
+| `src/targets.js` | Shootable barrels and the bottles on them — instanced, with per-instance destructible state. |
+| `src/vfx.js` | Muzzle flash, tracer, sparks, decals, spent shells, debris. Fixed pools, allocated once. |
+| `src/audio.js` | `THREE.Audio` wrapper. A missing file is one warning and silence — it never throws. |
 | `src/reins.js` | Bridle and reins, rebuilt each frame from live bones across **both** rigs. |
 | `src/camera.js` | `ThirdPersonCamera` — orbit, occlusion, sway, mounted mode, damped pivot height. |
 | `src/input.js` | Keyboard set, pointer lock, mouse deltas. |
@@ -107,6 +120,13 @@ Critical invariants:
   on bones no clip rewrites, and nothing releases a bone no clip owns.
 - `findClip` matches **exact-after-`|` first**, then substring; `HitRecieve` is
   misspelled in the asset; `Run` substring-matches five clips.
+- **Anything parented into the humanoid rig inherits a ~101× armature scale**,
+  and bone rest orientations are arbitrary (baked IK). Measure and divide the
+  scale out; *solve* a held object's rotation numerically rather than guessing
+  an angle. `weapons.js` is the worked example.
+- **Two pose layers now run after the mixer**, in order: `riding-pose.js`
+  then `aim-pose.js`. They own disjoint bones on purpose. Do not give a third
+  system a bone one of them already claims without deciding who yields.
 
 ## Before modifying the horse or the rider
 
@@ -134,6 +154,27 @@ Critical invariants:
   any character root. Nose-up is **negative** `rotation.x`.
 - `HORSE.modelScale` is hardcoded (0.58) and must stay that way; the asset has
   a scale of 100 baked in.
+
+## Before modifying combat
+
+Read [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-023 through ADR-026.
+
+- **`combat.js`'s frame is split in two on purpose** — `pollInput()` before
+  `horse.update()`, `update()` after the rig is posed. Collapse it and either
+  the horse steers as if nobody is aiming, or every shot is aimed a frame
+  stale. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#boot-and-per-frame-order).
+- **The raycast starts at the muzzle empty, never at the camera.** The camera
+  only supplies the aim *point* (where the crosshair lands); the shot travels
+  from the barrel to it. BUILD-PLAN.md requires this and smoke checks it.
+- **Aiming is a pose layer, not the rig's shoot clips** (ADR-024), even though
+  `Gun_Shoot` is real. A clip cannot track the crosshair and cannot coexist
+  with the seated riding pose. The clips still carry the base on foot.
+- **The reload gate reads `horse.isGalloping`, not `staminaExhausted`.** They
+  are different signals and swapping them is wrong in both directions.
+- Shots are **analytic** against the collider list and the heightfield
+  (ADR-025), the same reasoning as ADR-001/ADR-002. No mesh raycasts.
+- Mounted/airborne accuracy penalties live in `config-horse.js`, not
+  `config-combat.js` — they are properties of the horse, not the gun.
 
 ## Before modifying collision, or making something jumpable
 
@@ -185,6 +226,22 @@ arbitrary `SkinnedMesh` — a CPU-side `Box3` never applies bone transforms. For
 "where is the surface", **raycast** (r160's `SkinnedMesh.raycast` does apply
 them). Verify a replacement model's skeleton and clip set match before swapping.
 
+## Before adding anything to `main.js`'s load sequence
+
+**A throw in `init()` is a cliff, not a degradation.** Round 3 wired the muzzle
+flash to `character.weapon.muzzle` and forgot to arm the placeholder rig, so
+with `player.glb` missing the whole boot unwound at that line: no audio, no
+combat, no render loop, "failed to start", and sixteen smoke checks — most of
+them round 2's — failing at once, far from the cause.
+
+- Guard anything `init()` does with an **optional** asset.
+- **Both** character rigs implement the character interface independently.
+  Anything added to one must be added to the other.
+- Re-run the renamed-GLB check every round that touches that interface
+  ([`docs/TESTING.md`](docs/TESTING.md)). Nothing else tests the fallback, and
+  it is the only thing standing behind BUILD-PLAN.md's "keep the game fully
+  playable" rule.
+
 ## Before writing or changing a test
 
 Read [`docs/TESTING.md`](docs/TESTING.md). Three harness gotchas produce
@@ -221,6 +278,24 @@ confirm a new check **fails on the pre-fix code**.
 Fixed bugs live in [`docs/DEVELOPMENT-NOTES.md`](docs/DEVELOPMENT-NOTES.md).
 These are still open:
 
+- **Nobody has fired a shot in real play.** Round 3's whole feel — fire rate,
+  reload length, spread, recoil kick and shake, the aim camera's distance and
+  FOV, how the aiming pose reads in motion, whether steering the horse on A/D
+  alone is workable — was set from measurements and static screenshots. The
+  poses *were* looked at (screenshots, since deleted), and the gun's hold
+  offsets were solved numerically off the live skeleton rather than eyeballed;
+  everything else is unwatched. Levers are tabulated in `config-combat.js`.
+- **The support hand does not touch the gun.** There is no IK: the left arm is
+  posed to sit under the right, and the gap between them varies with
+  elevation. It was made worse by the support arm following only half the
+  elevation, which is fixed — but it is a fixed pose, not a solved one.
+- **`Gun_Shoot` / `Idle_Gun_Shoot` are now dead clips**, by ADR-024's choice.
+  If the procedural recoil reads badly on foot, playing `Gun_Shoot` there is
+  still available — but it will not work mounted, so that would be two paths.
+- **A collider circle is not a silhouette.** A shot can clip the edge of a
+  rock's collider without visually touching the rock — the same approximation
+  the player already walks into, now visible as a spark in mid-air.
+
 - **Nobody has ridden the horse.** Every feel-related number — AI wander,
   lean-into-turns sign and magnitude, stamina pacing, riding-pose bob and
   carriage, jump arc, hang time, camera lag — was tuned from measurements and
@@ -243,9 +318,9 @@ These are still open:
 - **`saddleSway` carries a ~-0.69 constant bias while moving and clips at -1**,
   because its rest height was captured against the idle clip. Documented and
   deliberately not fixed; it changes the feel of a system nobody has watched.
-- **No wind on the grass** (round 7), **no audio at all** (round 3 onward),
-  **no saddle/stirrup geometry** — the rider's boots hang where stirrups would
-  be, holding nothing.
+- **No wind on the grass** (round 7), **no saddle/stirrup geometry** — the
+  rider's boots hang where stirrups would be, holding nothing. Audio is now
+  three one-shots (gunshot / reload / hit); round 7 owns the ambience.
 - **Mouse-look orbit direction** was derived analytically and never watched.
   If inverted, it's one sign flip in `camera.js`'s `handleLook()`.
 - **Grass colour and keep-out fixes have not been visually re-confirmed**

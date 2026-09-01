@@ -136,10 +136,56 @@ There is also **no Blender and no FBX toolchain installed.**
 than silently shipping without the asset. BUILD-PLAN.md's appendix is the
 human's manual-download fallback.
 
-**Untested for round 3's audio:** `freesound.org` and `kenney.nl` have not
-been tried. Attempt the fetch yourself first, per BUILD-PLAN.md's round-0
-pattern; if blocked, hand it to the human — a silent gunfight is explicitly
-called out in BUILD-PLAN.md as feeling broken.
+**Audio hosts ARE reachable** — tested in round 3: `kenney.nl`,
+`freesound.org` and `opengameart.org` all returned 200. The block list above
+is specific to those five hosts, not to the whole internet, so **try the fetch
+before assuming**.
+
+**There is no media toolchain on the box, but there is one on npm.** No
+`ffmpeg`, no `sox`, no python audio module — but `npm i --no-save
+ffmpeg-static` pulls a working `ffmpeg.exe` and the registry is allow-listed.
+That is a dev-time tool, not a runtime dependency, which BUILD-PLAN.md
+explicitly permits. Windows also ships 7-Zip at
+`C:\Program Files-Zipz.exe`, which is how a `.7z` sample library got
+opened.
+
+---
+
+## Audio — what is in `audio/`, and where it came from
+
+Three files, added round 3. **All CC0.** All re-encoded to mono 44.1kHz Ogg
+Vorbis (`libvorbis -q:a 4`) and loudness-normalised, because `PositionalAudio`
+does not pan a stereo buffer and the raw sources were 96kHz multi-megabyte
+WAVs.
+
+| File | Source | Licence | Notes |
+|---|---|---|---|
+| `gunshot.ogg` | OpenGameArt "Gunshots" by *kurt*, the `Black Powder.wav` track | **CC0** | Black powder, which is the right era for this game. Trimmed to 1.6s from a 4s take: leading silence stripped, 0.3s fade out. 16KB. |
+| `reload.ogg` | OpenGameArt "2 Gun Reloads" by *starninjas*, `gun_reload.1.ogg` | **CC0** | Already Ogg at source. 0.96s, which is why `COMBAT.reloadTime` is 1.7 — the clip plays once inside the lockout rather than looping. 12KB. |
+| `hit.ogg` | Kenney "Impact Sounds", `impactPlank_medium_000.ogg` | **CC0** | Wood impact — barrels are the main thing being shot. Already Ogg at source. 0.78s, 9KB. |
+
+**One licence trap worth recording:** OpenGameArt's "Gunshot Sounds" entry is
+*listed* as CC0 on its page, but the `creativecommons.txt` inside its own zip
+says **CC-BY 3.0**. It was not used. Open the archive and read the licence file
+before trusting the listing.
+
+Round 7 needs `wind.ogg`, `crickets.ogg`, `piano.ogg` and `hoofbeats.ogg` —
+same sources, same pipeline, and `audio.js` will need a `loop()` alongside its
+one-shot `play()`.
+
+## No gun model, and why the revolver is procedural
+
+Quaternius's gun packs are on `quaternius.com`, which is in the blocked list
+above, and no CC0 revolver turned up anywhere reachable. `weapons.js` therefore
+builds one from `CylinderGeometry`/`BoxGeometry`/`TorusGeometry` — frame,
+cylinder, barrel, ejector rod, hammer spur, raked grip, trigger guard —
+proportioned on a Colt Single Action Army (190mm barrel, 280mm overall). Every
+dimension is in `GUN` in `config-combat.js`.
+
+This is the same "build it rather than ship without it" call BUILD-PLAN.md
+makes for the character fallback, and it is a **drop-in swap**: point
+`weapons.js`'s `buildRevolverMesh()` at a loaded GLB instead and the
+attachment, the muzzle empty and every offset keep working unchanged.
 
 ---
 

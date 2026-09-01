@@ -986,6 +986,546 @@ const CHECKS = [
     if (info.isPlaceholder) return null; // placeholder fallback path, not applicable
     return info.hasJumpAction ? 'character.actions.jump exists — the removed jump-clip pipeline is back' : null;
   }],
+
+  // ============================================================ round 3 ===
+
+  ['draw calls are inside BUILD-PLAN.md\'s ~120 budget', async () => {
+    // Not a feel check and not round 7's real performance pass — just a floor
+    // that catches a round quietly adding fifty draw calls. vfx.js's pools are
+    // fixed-size for exactly this reason, so the number should barely move
+    // whether nothing or everything is on screen.
+    const info = await page.evaluate(() => {
+      const r = window.__debug?.renderer;
+      return r ? { calls: r.info.render.calls, triangles: r.info.render.triangles, programs: r.info.programs?.length ?? null } : null;
+    });
+    if (!info) return 'window.__debug.renderer is missing — cannot read the draw-call count';
+    console.log(`  (info) draw calls ${info.calls}, triangles ${info.triangles.toLocaleString()}, programs ${info.programs}`);
+    return info.calls <= 120 ? null : `${info.calls} draw calls, budget is ~120`;
+  }],
+
+  ['all three round-3 sounds loaded', async () => {
+    // audio.js never throws on a missing file — that is BUILD-PLAN.md's rule
+    // and the reason a silent gunfight would otherwise ship unnoticed. The
+    // only way to notice is to ask what it failed to load.
+    const missing = await page.evaluate(() => window.__debug?.audioMissing ?? null);
+    if (missing === null) return 'no audio layer was built at all';
+    return missing.length ? `missing audio: ${missing.join(', ')} — the gunfight will be silent` : null;
+  }],
+
+  ['the revolver hangs off the hand bone at life size, not the armature\'s scale', async () => {
+    // Two separate traps in one check. First, GLTFLoader strips dots, so the
+    // bone is `WristR` and not `Wrist.R` — getting that wrong attaches the gun
+    // to the character root instead (weapons.js warns, but a warning is not a
+    // failure). Second, this rig carries a large baked armature scale that any
+    // parented mesh inherits; without dividing it back out the revolver
+    // renders at some multiple of life size.
+    const info = await page.evaluate(() => {
+      const d = window.__debug;
+      const w = d?.player?.character?.weapon;
+      if (!w) return { missing: true };
+      const chain = [];
+      for (let n = w.group; n; n = n.parent) chain.push(n.name || n.type);
+      w.group.updateWorldMatrix(true, false);
+      const s = new (w.group.constructor === Object ? Object : Object)(); // placeholder, unused
+      const m = w.group.matrixWorld.elements;
+      // Column lengths of the world matrix are its world scale.
+      const worldScale = Math.hypot(m[0], m[1], m[2]);
+      return {
+        missing: false,
+        attachedToHand: w.attachedToHand,
+        boneName: w.handBone?.name ?? null,
+        boneWorldScale: w.boneWorldScale?.x ?? null,
+        worldScale,
+        chain: chain.slice(0, 6),
+        isPlaceholder: d.modelsLoaded?.player === false,
+      };
+    });
+    if (info.missing) return 'the player character has no weapon at all';
+    if (!info.attachedToHand) return `the revolver fell back to the character root (bone search failed; chain: ${info.chain.join(' < ')})`;
+    if (info.isPlaceholder) return null; // the capsule rig has no armature scale to undo
+    if (info.boneName !== 'WristR') return `attached to "${info.boneName}", expected the dot-stripped runtime name WristR`;
+    // The whole point of the divide-out: the bone's own scale is nowhere near
+    // 1, and the gun's ends up very close to it.
+    if (!(info.worldScale > 0.5 && info.worldScale < 2)) {
+      return `the revolver renders at world scale ${info.worldScale.toFixed(2)} — the armature's baked scale (${info.boneWorldScale?.toFixed?.(2)}) is not being divided out`;
+    }
+    return null;
+  }],
+
+  ['the muzzle empty rides the gun barrel, not the camera', async () => {
+    // BUILD-PLAN.md is explicit that the muzzle flash and the raycast origin
+    // both come from an Object3D parented to the barrel tip and NOT from the
+    // camera, and docs/ROADMAP.md asked for this specifically. Two halves: the
+    // camera must not be anywhere in the muzzle's parent chain, and the muzzle
+    // must actually MOVE with the rig — a muzzle welded to the world would
+    // pass a pure ancestry test while aiming from a fixed point in space.
+    const info = await page.evaluate(() => {
+      const d = window.__debug;
+      const w = d?.player?.character?.weapon;
+      const root = d?.player?.character?.root;
+      if (!w || !root) return { missing: true };
+      const chain = [];
+      let sawCamera = false;
+      for (let n = w.muzzle; n; n = n.parent) {
+        chain.push(n.name || n.type);
+        if (n.isCamera) sawCamera = true;
+      }
+      const before = { x: 0, y: 0, z: 0 };
+      w.syncWorld();
+      before.x = w.muzzle.matrixWorld.elements[12];
+      before.y = w.muzzle.matrixWorld.elements[13];
+      before.z = w.muzzle.matrixWorld.elements[14];
+      const restore = root.rotation.y;
+      root.rotation.y = restore + 1.2;
+      root.updateMatrixWorld(true);
+      w.syncWorld();
+      const moved = Math.hypot(
+        w.muzzle.matrixWorld.elements[12] - before.x,
+        w.muzzle.matrixWorld.elements[14] - before.z,
+      );
+      root.rotation.y = restore;
+      root.updateMatrixWorld(true);
+      return { missing: false, sawCamera, chain: chain.slice(0, 8), moved, reachesRoot: chain.includes(root.name || root.type) };
+    });
+    if (info.missing) return 'no weapon/muzzle to check';
+    if (info.sawCamera) return `the muzzle is parented under the camera (chain: ${info.chain.join(' < ')})`;
+    if (!(info.moved > 0.05)) {
+      return `turning the character moved the muzzle only ${info.moved.toFixed(3)}m — it is not riding the rig`;
+    }
+    return null;
+  }],
+
+  ['aiming narrows the FOV and pulls the camera in, on foot and mounted alike', async () => {
+    // docs/ROADMAP.md item 10: aim and mounted must COMPOSE, not override each
+    // other. Reads the camera's own live fov and distance rather than the
+    // config, so it covers the easing path too.
+    const cfg = await page.evaluate(async () => {
+      const c = (await import('/src/config.js')).CAMERA;
+      return { aimFov: c.aimFov, aimDistance: c.aimDistance, mountedAimDistance: c.mountedAimDistance, distance: c.distance };
+    });
+    const read = () => page.evaluate(() => ({
+      fov: window.__debug.cameraFov,
+      dist: window.__debug.cameraCurrentDistance,
+      aimWeight: window.__debug.aimWeight,
+      mounted: window.__debug.mounted,
+    }));
+    await page.evaluate(() => { window.__debug.combat.setAimOverride(false); });
+    await page.waitForFunction(() => window.__debug.aimWeight < 0.05, null, { timeout: 20000 });
+    const hip = await read();
+    await page.evaluate(() => { window.__debug.combat.setAimOverride(true); });
+    await page.waitForFunction(() => window.__debug.aimWeight > 0.95, null, { timeout: 20000 });
+    const aimed = await read();
+    await page.evaluate(() => { window.__debug.combat.setAimOverride(null); });
+    if (!(aimed.fov < hip.fov - 5)) {
+      return `fov went ${hip.fov.toFixed(1)} -> ${aimed.fov.toFixed(1)} while aiming; expected it to narrow toward ${cfg.aimFov}`;
+    }
+    if (!(aimed.dist < hip.dist - 0.5)) {
+      return `camera distance went ${hip.dist.toFixed(2)} -> ${aimed.dist.toFixed(2)} while aiming; expected it to pull in`;
+    }
+    return null;
+  }],
+
+  ['barrels are shootable AND jumpable — a real, finite collider top', async () => {
+    // ADR-012's contract, reused rather than re-invented: barrels are low
+    // enough for the horse to clear, so they must carry a real `top` instead
+    // of the default Infinity that makes a collider unlimited-height.
+    const info = await page.evaluate(async () => {
+      const cfg = (await import('/src/config-combat.js')).TARGETS;
+      const { colliders } = await import('/src/collision.js');
+      const barrels = colliders.filter((c) => c.meta?.kind === 'barrel');
+      const t = window.__debug.targets;
+      return {
+        counts: t?.counts ?? null,
+        registered: barrels.length,
+        finiteTops: barrels.filter((c) => Number.isFinite(c.top)).length,
+        haveTargetRef: barrels.filter((c) => !!c.meta?.target).length,
+        height: cfg.barrelHeight,
+        minTopAboveGround: Math.min(...barrels.map((c) => c.top - (c.meta.target?.base ?? 0))),
+      };
+    });
+    if (!info.counts) return 'no targets were built';
+    if (info.counts.barrels < 1 || info.counts.bottles < 1) {
+      return `expected barrels and bottles to shoot at, got ${JSON.stringify(info.counts)}`;
+    }
+    if (info.registered !== info.counts.barrels) {
+      return `${info.counts.barrels} barrels placed but ${info.registered} colliders registered`;
+    }
+    if (info.finiteTops !== info.registered) {
+      return `${info.registered - info.finiteTops} barrel colliders have top: Infinity — the horse cannot jump them`;
+    }
+    if (info.haveTargetRef !== info.registered) {
+      return 'barrel colliders are missing their meta.target back-reference, so a hit cannot be attributed';
+    }
+    if (Math.abs(info.minTopAboveGround - info.height) > 0.02) {
+      return `barrel collider top sits ${info.minTopAboveGround.toFixed(2)} above its base, expected ${info.height}`;
+    }
+    return null;
+  }],
+
+  ['a fired shot hits a target directly in front, from the muzzle', async () => {
+    // docs/ROADMAP.md item 11's headline check. The target is moved onto the
+    // camera's LIVE view ray rather than the camera being solved onto the
+    // target: the camera looks at its own pivot plus a shoulder offset, so an
+    // analytically aimed yaw/pitch misses by more than a barrel's width at
+    // this range. Spread is zeroed for the duration so the check tests the
+    // aiming chain, not the dice — a separate check covers the spread itself.
+    const setup = await page.evaluate(async () => {
+      const cfg = await import('/src/config-combat.js');
+      const d = window.__debug;
+      const c = d.combat;
+      const t = d.targets;
+      const p = d.player;
+      const h = d.horse;
+      if (p.mounted) h.handleMountToggle(p);
+
+      window.__shotRestore = {
+        spreadHip: cfg.COMBAT.spreadHip,
+        spreadAim: cfg.COMBAT.spreadAim,
+        cfg,
+      };
+      cfg.COMBAT.spreadHip = 0;
+      cfg.COMBAT.spreadAim = 0;
+
+      // Clear plateau, level view: nothing between the muzzle and the target
+      // but the 14m of air we are about to put a barrel at the end of.
+      p.position.set(0, p.world.groundHeightAt(0, 95), 95);
+      d.tpCamera.pitch = 0;
+      d.tpCamera.yaw = 0;
+      d.tpCamera.snap(p.position);
+      return { ok: true };
+    });
+    if (!setup.ok) return 'could not set up the shot';
+    // Let a frame run so the camera settles and the rig is posed.
+    const framesAtSetup = await page.evaluate(() => window.__frames);
+    await page.waitForFunction((f) => window.__frames > f + 2, framesAtSetup, { timeout: 20000 });
+
+    const result = await page.evaluate(async () => {
+      const d = window.__debug;
+      const t = d.targets;
+      const cam = d.tpCamera.camera;
+      const eye = cam.getWorldPosition(new (cam.position.constructor)());
+      const dir = cam.getWorldDirection(new (cam.position.constructor)());
+      const dist = 14;
+      const tx = eye.x + dir.x * dist;
+      const ty = eye.y + dir.y * dist;
+      const tz = eye.z + dir.z * dist;
+
+      const item = t.items.find((i) => i.kind === 'barrel' && i.alive);
+      window.__shotRestore.item = { x: item.x, z: item.z, base: item.base, top: item.top, hits: item.hits };
+      window.__shotRestore.collider = { x: item.collider.x, z: item.collider.z, top: item.collider.top };
+      window.__shotRestore.ref = item;
+      const half = (item.top - item.base) / 2;
+      item.x = tx; item.z = tz;
+      item.base = ty - half; item.top = ty + half;
+      item.collider.x = tx; item.collider.z = tz; item.collider.top = item.top;
+
+      const before = d.combat.shotsFired;
+      const fired = d.combat.tryFire();
+      return { fired, before, targetPoint: { x: tx, y: ty, z: tz } };
+    });
+    if (!result.fired) return 'combat.tryFire() was refused with a loaded gun and no reload in progress';
+    await page.waitForFunction((n) => window.__debug.shotsFired > n, result.before, { timeout: 20000 });
+
+    const hit = await page.evaluate(() => {
+      const d = window.__debug;
+      const out = { lastHit: d.combat.lastHit, hitsOnTarget: window.__shotRestore.ref.hits };
+      // Put the barrel back where it was placed, un-hit, before anything else
+      // looks at it.
+      const r = window.__shotRestore;
+      Object.assign(r.ref, r.item);
+      r.ref.collider.x = r.collider.x;
+      r.ref.collider.z = r.collider.z;
+      r.ref.collider.top = r.collider.top;
+      r.cfg.COMBAT.spreadHip = r.spreadHip;
+      r.cfg.COMBAT.spreadAim = r.spreadAim;
+      return out;
+    });
+    if (!hit.lastHit || hit.lastHit.kind === null) return 'the shot hit nothing at all';
+    if (hit.lastHit.kind !== 'barrel') {
+      return `the shot hit "${hit.lastHit.kind}" at ${hit.lastHit.distance.toFixed(1)}m instead of the barrel directly in front`;
+    }
+    if (hit.hitsOnTarget < 1) return 'the barrel was hit but recorded no damage';
+    return null;
+  }],
+
+  ['ammo decrements per shot and a reload refills the cylinder', async () => {
+    const cfg = await page.evaluate(async () => (await import('/src/config-combat.js')).COMBAT);
+    // The previous check fired a shot, and a shot leaves COMBAT.fireInterval of
+    // cooldown behind. Wait it out on the public getter rather than racing it —
+    // this check timed out exactly once for want of these two lines.
+    await page.waitForFunction(() => window.__debug.combat.canFire, null, { timeout: 30000 });
+    const start = await page.evaluate(() => {
+      const c = window.__debug.combat;
+      c.ammo = 3; // mid-cylinder, so a refill is visibly different from "unchanged"
+      return { ammo: c.ammo, shots: c.shotsFired, fired: c.tryFire() };
+    });
+    if (start.ammo !== 3) return 'could not set the ammo count';
+    if (!start.fired) return 'combat.tryFire() was refused immediately after canFire reported true';
+    await page.waitForFunction((n) => window.__debug.shotsFired > n, start.shots, { timeout: 30000 });
+    const afterShot = await page.evaluate(() => window.__debug.combat.ammo);
+    if (afterShot !== 2) return `firing one round took ammo from 3 to ${afterShot}, expected 2`;
+
+    const accepted = await page.evaluate(() => window.__debug.combat.tryReload());
+    if (!accepted) return 'a reload was refused on foot with a part-empty cylinder';
+    const midReload = await page.evaluate(() => ({
+      reloading: window.__debug.combat.reloading,
+      ammo: window.__debug.combat.ammo,
+      refused: window.__debug.combat.tryFire(),
+    }));
+    if (!midReload.reloading) return 'tryReload() did not enter the reloading state';
+    if (midReload.ammo !== 2) return `ammo jumped to ${midReload.ammo} at the START of the reload; it should only refill when the lockout ends`;
+    if (midReload.refused !== false) return 'the gun fired during the reload lockout';
+
+    // COMBAT.reloadTime is 1.7s of SIMULATED time; headless runs ~3fps with dt
+    // capped at RENDER.maxDeltaTime, so that is ~34 frames of wall clock.
+    await page.waitForFunction(() => window.__debug.combat.reloading === false, null, { timeout: 40000 });
+    const done = await page.evaluate(() => window.__debug.combat.ammo);
+    if (done !== cfg.magazine) return `after the reload the cylinder holds ${done}, expected ${cfg.magazine}`;
+    // Empty gun, no reload: the trigger must do nothing rather than going negative.
+    const dry = await page.evaluate(() => {
+      const c = window.__debug.combat;
+      c.ammo = 0;
+      const fired = c.tryFire();
+      const ammo = c.ammo;
+      c.ammo = 6;
+      return { fired, ammo };
+    });
+    if (dry.fired || dry.ammo !== 0) return `an empty gun fired anyway (fired=${dry.fired}, ammo went to ${dry.ammo})`;
+    return null;
+  }],
+
+  ['a bottle breaks in one hit, a barrel takes two, and a dead target stops colliding', async () => {
+    const info = await page.evaluate(async () => {
+      const cfg = (await import('/src/config-combat.js')).COMBAT;
+      const { colliders } = await import('/src/collision.js');
+      const t = window.__debug.targets;
+      const bottle = t.items.find((i) => i.kind === 'bottle' && i.alive);
+      const barrel = t.items.find((i) => i.kind === 'barrel' && i.alive && !t.items.some(
+        (b) => b.kind === 'bottle' && b.alive && Math.abs(b.base - i.top) < 1e-3
+          && Math.hypot(b.x - i.x, b.z - i.z) < 0.5,
+      ));
+      if (!bottle || !barrel) return { missing: true };
+
+      const bottleOutcome = t.hit(bottle);
+      const barrelFirst = t.hit(barrel);
+      const barrelSecond = t.hit(barrel);
+      const colliderStillListed = colliders.includes(barrel.collider ?? {});
+      // A destroyed instance is hidden by a zero-scale matrix, not a rebuilt
+      // buffer — read the matrix back to prove it actually happened.
+      const m = new Float32Array(16);
+      const arr = barrel.mesh.instanceMatrix.array;
+      for (let i = 0; i < 16; i++) m[i] = arr[barrel.index * 16 + i];
+      const scaleX = Math.hypot(m[0], m[1], m[2]);
+      return {
+        missing: false, bottleOutcome, barrelFirst, barrelSecond,
+        bottleAlive: bottle.alive, barrelAlive: barrel.alive,
+        colliderStillListed, scaleX, barrelHits: cfg.barrelHits, bottleHits: cfg.bottleHits,
+      };
+    });
+    if (info.missing) return 'could not find a live bottle and a bottle-free barrel to test on';
+    if (info.bottleOutcome !== 'destroyed' || info.bottleAlive) {
+      return `a bottle survived ${info.bottleHits} hit(s) (outcome "${info.bottleOutcome}")`;
+    }
+    if (info.barrelFirst !== 'hit') return `a barrel reported "${info.barrelFirst}" on its first hit, expected "hit"`;
+    if (info.barrelSecond !== 'destroyed' || info.barrelAlive) {
+      return `a barrel survived ${info.barrelHits} hits (outcome "${info.barrelSecond}")`;
+    }
+    if (info.colliderStillListed) return 'a destroyed barrel is still registered in the collider list — it blocks movement and catches bullets';
+    if (info.scaleX > 1e-6) return `a destroyed barrel's instance matrix still has scale ${info.scaleX} — it is still drawn`;
+    return null;
+  }],
+
+  ['the reload is gated on the horse\'s GAIT, not on its stamina', async () => {
+    // docs/ROADMAP.md item 2 by name: `staminaExhausted` is not "currently
+    // galloping", and gating on it would refuse reloads at a standstill and
+    // allow them at a gallop — exactly backwards. Both halves are asserted.
+    const info = await page.evaluate(async () => {
+      const cfg = (await import('/src/config-horse.js')).HORSE;
+      const d = window.__debug;
+      const h = d.horse;
+      const p = d.player;
+      const c = d.combat;
+      if (!p.mounted) {
+        p.position.set(h.position.x + 1, h.position.y, h.position.z);
+        h.handleMountToggle(p);
+      }
+      const restore = { animState: h.animState, stamina: h.stamina, exhausted: h.staminaExhausted, ammo: c.ammo, reloading: c.reloading };
+      c.reloading = false;
+      c.ammo = 1; // part-empty, so canReload is not refused for being full
+
+      h.animState = 'gallop';
+      h.stamina = cfg.staminaMax;
+      h.staminaExhausted = false;
+      const atGallopFullTank = { galloping: h.isGalloping, canReload: c.canReload, exhausted: h.staminaExhausted };
+
+      h.animState = 'walk';
+      h.stamina = 0;
+      h.staminaExhausted = true;
+      const atWalkEmptyTank = { galloping: h.isGalloping, canReload: c.canReload, exhausted: h.staminaExhausted };
+
+      Object.assign(h, { animState: restore.animState, stamina: restore.stamina, staminaExhausted: restore.exhausted });
+      c.ammo = restore.ammo;
+      c.reloading = restore.reloading;
+      if (p.mounted) h.handleMountToggle(p);
+      return { atGallopFullTank, atWalkEmptyTank };
+    });
+    if (info.atGallopFullTank.canReload) {
+      return 'a reload was allowed at a full gallop (with a full stamina tank) — the gate is reading stamina, not gait';
+    }
+    if (!info.atWalkEmptyTank.canReload) {
+      return 'a reload was refused at a walk with an exhausted horse — the gate is reading stamina, not gait';
+    }
+    return null;
+  }],
+
+  ['aiming raises the gun arm without unseating the rider', async () => {
+    // The partial-skeleton split BUILD-PLAN.md asks for, measured: while
+    // mounted and aiming, aim-pose.js must own the right arm while
+    // riding-pose.js keeps the legs. If the two layers fought, either the arm
+    // would never come up or the knees would come off the barrel.
+    //
+    // Measured in the HORSE'S OWN BODY FRAME, like every other cross-rig check
+    // here — a world-axis reading is right at rest and wrong in every turn.
+    const isPlaceholder = await page.evaluate(() => window.__debug.modelsLoaded.player === false
+      || window.__debug.modelsLoaded.horse === false);
+    if (isPlaceholder) return null; // no skeleton to assert against
+    const mounted = await page.evaluate(() => {
+      const d = window.__debug;
+      const h = d.horse;
+      const p = d.player;
+      if (!p.mounted) {
+        p.position.set(h.position.x + 1, h.position.y, h.position.z);
+        h.handleMountToggle(p);
+      }
+      return p.mounted;
+    });
+    if (!mounted) return 'could not remount for the mounted-aim check';
+    const mountLerpTime = await page.evaluate(async () => (await import('/src/config-horse.js')).HORSE.mountLerpTime);
+    await page.waitForFunction((t) => window.__debug.horse._mountBlendT >= t, mountLerpTime, { timeout: 20000 });
+
+    const sample = () => page.evaluate(() => {
+      const d = window.__debug;
+      const rig = d.player.character.root;
+      const horseRig = d.horse.character.root;
+      const THREEv = rig.position.constructor;
+      const inv = horseRig.matrixWorld.clone().invert();
+      const body = (bone) => {
+        const v = new THREEv();
+        bone.getWorldPosition(v);
+        v.applyMatrix4(inv);
+        return { x: v.x, y: v.y, z: v.z };
+      };
+      const bones = {};
+      for (const name of ['WristR', 'LowerLegL', 'LowerLegR', 'Body']) {
+        const b = rig.getObjectByName(name);
+        if (b) bones[name] = body(b);
+      }
+      return bones;
+    });
+
+    await page.evaluate(() => window.__debug.combat.setAimOverride(false));
+    await page.waitForFunction(() => window.__debug.aimWeight < 0.05, null, { timeout: 20000 });
+    const down = await sample();
+    await page.evaluate(() => window.__debug.combat.setAimOverride(true));
+    await page.waitForFunction(() => window.__debug.aimWeight > 0.95, null, { timeout: 20000 });
+    const up = await sample();
+    await page.evaluate(() => window.__debug.combat.setAimOverride(null));
+
+    if (!down.WristR || !up.WristR) return 'WristR not found on the player rig — the revolver has nothing to hang off';
+    // The gun hand comes UP and FORWARD in the horse's own frame.
+    const rise = up.WristR.y - down.WristR.y;
+    if (!(rise > 0.15)) {
+      return `aiming raised the gun hand only ${rise.toFixed(3)} in the horse's body frame — the aim pose is not reaching the arm`;
+    }
+    // ...and the legs stay exactly where the riding pose put them.
+    for (const leg of ['LowerLegL', 'LowerLegR']) {
+      if (!down[leg] || !up[leg]) continue;
+      const moved = Math.hypot(up[leg].x - down[leg].x, up[leg].y - down[leg].y, up[leg].z - down[leg].z);
+      if (moved > 0.12) {
+        return `aiming moved ${leg} by ${moved.toFixed(3)} — the aim layer is stealing bones the riding pose owns`;
+      }
+    }
+    return null;
+  }],
+
+  ['the aiming pose is idempotent across frames', async () => {
+    // The same compounding-delta guard the riding pose carries, for the same
+    // reason (docs/ANIMATION.md rule 4): aim-pose.js applies deltas, and the
+    // bones it claims are not all rewritten by a clip every frame. If the
+    // baseline restore were dropped, the arm would creep a little further
+    // every frame and the check below would drift.
+    const isPlaceholder = await page.evaluate(() => window.__debug.modelsLoaded.player === false);
+    if (isPlaceholder) return null;
+    await page.evaluate(() => {
+      const d = window.__debug;
+      if (d.player.mounted) d.horse.handleMountToggle(d.player);
+      d.combat.setAimOverride(true);
+    });
+    await page.waitForFunction(() => window.__debug.aimWeight > 0.98, null, { timeout: 20000 });
+    const read = () => page.evaluate(() => {
+      const rig = window.__debug.player.character.root;
+      const out = {};
+      for (const name of ['UpperArmR', 'LowerArmR', 'Chest']) {
+        const b = rig.getObjectByName(name);
+        if (b) out[name] = [b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w];
+      }
+      return out;
+    });
+    const first = await read();
+    const frames = await page.evaluate(() => window.__frames);
+    await page.waitForFunction((f) => window.__frames > f + 8, frames, { timeout: 25000 });
+    const later = await read();
+    await page.evaluate(() => window.__debug.combat.setAimOverride(null));
+    for (const name of Object.keys(first)) {
+      const a = first[name];
+      const b = later[name];
+      if (!b) return `${name} vanished between samples`;
+      const drift = Math.max(...a.map((v, i) => Math.abs(v - b[i])));
+      // The idle clip underneath keeps moving, so this is not zero — but a
+      // compounding delta walks off monotonically and blows straight past it.
+      if (drift > 0.06) {
+        return `${name} drifted ${drift.toFixed(4)} over 8 frames of a held aim — the pose is compounding, not idempotent`;
+      }
+    }
+    return null;
+  }],
+
+  ['shot spread is a real cone, and riding widens it', async () => {
+    // The accuracy penalty BUILD-PLAN.md requires for mounted fire, read off
+    // the same getter the shot uses. Also pins the ordering that makes aiming
+    // worth doing at all.
+    const info = await page.evaluate(async () => {
+      const d = window.__debug;
+      const c = d.combat;
+      const h = d.horse;
+      const p = d.player;
+      const wasMounted = p.mounted;
+      if (wasMounted) h.handleMountToggle(p);
+      c.setAimOverride(false);
+      c.aiming = false;
+      const hip = c.currentSpread;
+      c.aiming = true;
+      const aimed = c.currentSpread;
+
+      p.position.set(h.position.x + 1, h.position.y, h.position.z);
+      h.handleMountToggle(p);
+      const mountedAimed = c.currentSpread;
+      c.aiming = false;
+      const mountedHip = c.currentSpread;
+      if (p.mounted) h.handleMountToggle(p);
+      c.setAimOverride(null);
+      return { hip, aimed, mountedAimed, mountedHip };
+    });
+    if (!(info.aimed > 0)) return 'aimed spread is zero — a shot with no cone at all is not a spread';
+    if (!(info.hip > info.aimed)) return `hip spread ${info.hip} is not wider than aimed spread ${info.aimed}`;
+    if (!(info.mountedAimed > info.aimed)) {
+      return `aiming from the saddle (${info.mountedAimed}) is no less accurate than aiming on foot (${info.aimed})`;
+    }
+    if (!(info.mountedHip > info.hip)) {
+      return `hip fire from the saddle (${info.mountedHip}) is no less accurate than on foot (${info.hip})`;
+    }
+    return null;
+  }],
 ];
 
 for (const [label, fn] of CHECKS) {

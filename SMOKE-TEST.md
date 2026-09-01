@@ -377,3 +377,127 @@ resize above. Items 1 and 4 of that section no longer apply; 2 and 3 still do.
 3. **A jump costs 0.1 of the bar again** — about 10% rather than the ~6.7% it
    cost at 1.5. If jump-spamming now feels punishing, `jumpStaminaCost` is the
    lever, not the tank.
+
+---
+
+## Round 3 — guns
+
+**Controls added this round:** **right mouse** aim (hold) · **left mouse** fire
+(hold to fan the hammer) · **R** reload. Everything from earlier rounds is
+unchanged: WASD move, Shift sprint, Space jump, H whistle horse, E
+mount/dismount, mouse look, Esc to release the pointer.
+
+**Nobody has fired a shot in real play.** The poses were checked against
+screenshots and the gun's hold offsets were solved numerically off the live
+skeleton, but every *feel* number below is unwatched — the same state the horse
+was in before your play sessions caught two real bugs. Levers are in
+`src/config-combat.js` unless noted.
+
+### The gun itself
+
+1. **The revolver is in the right fist, life-sized, and points where the
+   character does.** It is procedural — there is no CC0 revolver model this
+   session could fetch (`quaternius.com` is blocked). If it floats off the
+   hand, sits at the wrong angle, or is the wrong size, `GUN.holdPosition` /
+   `GUN.holdRotation` are the two lines. They were *measured*, not guessed, so
+   a gross error means something upstream moved.
+2. **The gun is never holstered.** It stays in the hand at all times, including
+   while walking, riding and idling. That is deliberate (ADR-026) and no round
+   needs a draw until round 6 — but say so if it looks wrong just standing
+   around.
+
+### Aiming
+
+3. **Right mouse pulls the camera in, narrows the FOV, and slides the view over
+   the right shoulder**, with a crosshair appearing at the centre. Levers:
+   `CAMERA.aimDistance`, `aimFov`, `aimShoulderShift`, `fovLerpRate`.
+4. **While aiming, the character turns to face the camera**, so strafing means
+   moving sideways while still covering what you are looking at. Releasing the
+   button returns to "face the way you are running". `PLAYER.aimTurnRate`.
+5. **The gun tracks the crosshair up and down.** Look up and the arm should
+   raise with it; look down and it should drop. It follows 75% of the camera's
+   pitch on purpose (`AIM_POSE.elevationFollow`) — a full 100% put the shoulder
+   at a physically silly angle. Say if the gun visibly lags the crosshair.
+6. **The left hand comes up to support the gun on foot** — but it does not
+   actually touch it. There is no IK; both arms are posed, and the gap between
+   the hands varies with elevation. Worst at extreme up/down angles.
+
+### Firing
+
+7. **Shots land where the crosshair is.** The ray starts at the muzzle, not the
+   camera, so at very close range against a target off to one side the two can
+   disagree slightly. That is expected; a large disagreement is not.
+8. **Six rounds, then nothing.** The counter bottom-right shows pips plus a
+   numeral. An empty gun does not click, fire or go negative — it simply does
+   nothing until you reload.
+9. **Fire rate**: holding left mouse fans the hammer at `COMBAT.fireInterval`
+   (0.34s). If that feels machine-gun-ish for a single-action revolver, that is
+   the lever — or make it one shot per click.
+10. **Recoil** is three things at once: the camera pitches up
+    (`COMBAT.recoilPitchKick`), the whole view jolts
+    (`recoilShake`, capped by `CAMERA.shakeMax`), and the gun arm flips up
+    (`AIM_POSE.recoilArmPitch`). If it is too much, they are separable.
+11. **Muzzle flash, tracer, impact spark and a decal** on every shot. The flash
+    throws a brief point light — worth checking at the far end of the day when
+    the light is low, because that is when it will read most.
+12. **Accuracy**: hip fire scatters noticeably (`COMBAT.spreadHip`), aimed fire
+    is near-exact (`spreadAim`). Standing still and hip-firing at a bottle 15m
+    away should miss often enough to be worth aiming.
+
+### Reloading
+
+13. **R reloads over 1.7s, and the gun is dead for all of it.** The count jumps
+    to 6 only when the lockout *ends*, not at the start.
+14. **The reload has no clip** — this rig has no `Reload` animation. The gun
+    dips below frame instead, per BUILD-PLAN.md's substitution table. Six shells
+    drop to the ground partway through (a revolver ejects the whole cylinder at
+    once, which is why they come on reload and not per shot).
+15. **Spent shells bounce and settle**, then fade after ~2.4s.
+
+### Shootable targets
+
+16. **Twelve barrels with green bottles on top**, hand-placed on the plateau a
+    little south of spawn. They are a test range; move them by editing
+    `TARGETS.barrels` if they are in an awkward spot.
+17. **A bottle breaks in one hit. A barrel takes two.** Destroying a barrel
+    takes its bottles with it — they were standing on a lid that no longer
+    exists.
+18. **A barrel is low enough for the horse to jump.** Ride at one at a gallop
+    and press Space; it should clear like a rock. This fell out of the existing
+    collider contract and is worth confirming once.
+19. **A destroyed target stops blocking movement** — walk through where it was.
+
+### Mounted shooting
+
+20. **Aim and fire work from the saddle**, with the left hand still on the
+    reins and the legs still astride. This is the part with the most novel
+    machinery behind it (two pose layers owning different bones), so it is the
+    most likely to look subtly wrong in motion even though it measures right.
+21. **While aiming, W/S and the gallop stop responding and A/D steer the
+    horse.** This is BUILD-PLAN.md's requirement, and it is a real change of
+    meaning: unaimed, A/D point the horse where the camera looks; aimed, they
+    rein it left and right while the barrel tracks independently. If it feels
+    unresponsive, `HORSE.aimTurnRate` / `aimMaxSpeed` / `aimSpeedDecay`.
+22. **Shooting from horseback is much less accurate** —
+    `HORSE.mountedAccuracyPenalty` (2.4×), and `jumpAccuracyPenalty` (1.9×)
+    stacks on top while the horse is over an obstacle. Firing mid-jump is
+    allowed on purpose.
+23. **R is refused at a gallop.** Slow to a walk and it works. It is also
+    refused in mid-air. Note this is gated on the *gait*, not on stamina — an
+    exhausted horse at a walk still lets you reload.
+24. **The mounted aim camera is its own framing**, not the on-foot one and not
+    the ordinary mounted one. `CAMERA.mountedAimDistance` /
+    `mountedAimPivotHeight`.
+
+### Sound
+
+25. **Three sounds: the shot, the reload, and the impact.** All CC0 —
+    provenance is in `docs/ASSETS.md`. The gunshot is a real black-powder
+    recording, which is the right era.
+26. **Audio needs a click first.** Browsers hold the audio context suspended
+    until a user gesture; the click that takes pointer lock is it. If the first
+    shot after a page load is silent but later ones are not, that is the
+    gesture not having landed — worth reporting.
+27. **The shot is positional.** Fire, then turn: it should sound like it came
+    from where you were pointing, not from inside your head.
+28. **Mute is not implemented.** `M` does nothing until round 7.

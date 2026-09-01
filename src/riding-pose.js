@@ -265,10 +265,19 @@ export class RidingPose {
     }
   }
 
-  /** Closes both hands around the reins, about the axes `_captureGripAxes()` derived. */
-  _grip(curl, thumbCurl) {
+  /**
+   * Closes a hand around whatever it is holding, about the axes
+   * `_captureGripAxes()` derived. Defaults to both hands (the reins).
+   *
+   * `sides` exists for round 3: while aiming, the right hand grips the
+   * revolver and is posed by aim-pose.js, which calls this with `['R']`
+   * rather than re-deriving a grip — the hard part here (the naive knuckle
+   * axis is the zero vector on this rig) is already solved, and
+   * docs/ARCHITECTURE.md lists this method as reusable for exactly that.
+   */
+  _grip(curl, thumbCurl, sides = ['L', 'R']) {
     if (!this.canGrip || curl === 0) return;
-    for (const side of ['L', 'R']) {
+    for (const side of sides) {
       const axes = this._gripAxes[side];
       const wrist = this.bones[`Wrist${side}`];
       if (!axes || !wrist) continue;

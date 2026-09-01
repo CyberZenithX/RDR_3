@@ -4,10 +4,13 @@
  * collider that stays registered in collision.js for the horse's whole
  * lifetime (position mutated in place each frame, never re-added/removed).
  *
- * Two movement modes, chosen each frame by `this.mounted`:
- *  - unmounted: a small wander/follow/whistle AI (see _updateUnmounted)
+ * Three movement modes, chosen each frame by `this.mounted` and whether the
+ * rider is aiming:
+ *  - unmounted: a small wander/follow/whistle AI (horse-ai.js)
  *  - mounted: WASD steering read directly from input.js, same
  *    camera-relative convention player.js uses, gallop gated by stamina.
+ *  - mounted and aiming: A/D become a direct yaw rate and W/S drop out
+ *    entirely — see `_updateMountedAiming`, and BUILD-PLAN.md's round 3.
  *
  * Mount/dismount has no animation clip (per BUILD-PLAN.md's fake table) —
  * mounting eases the player's rendered position onto the saddle point over
@@ -16,10 +19,11 @@
  * onto the Player instance; player.js's own on-foot physics do not run
  * while `player.mounted` is true (see its update()).
  *
- * Two neighbours own the rest of the animal, both split out under
+ * Three neighbours own the rest of the animal, all split out under
  * BUILD-PLAN.md's 400-line cap: horse-jump.js owns the vertical axis (gravity,
- * the arc, what an obstacle has to be under to pass beneath) and horse-seat.js
- * owns where the rider sits and how the body under them moves.
+ * the arc, what an obstacle has to be under to pass beneath), horse-seat.js
+ * owns where the rider sits and how the body under them moves, and
+ * horse-ai.js owns what the animal does when nobody is on it.
  *
  * No vectors are allocated inside update() — everything reusable is an
  * instance scratch object, per the performance budget rule.
@@ -32,6 +36,7 @@ import { isKeyDown, isPointerLocked } from './input.js';
 import { addCircleCollider, resolveCollisions } from './collision.js';
 import { HorseJump } from './horse-jump.js';
 import { HorseSeat } from './horse-seat.js';
+import { HorseAI } from './horse-ai.js';
 
 function lerpAngle(a, b, t) {
   let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
@@ -71,12 +76,6 @@ export class Horse {
     this.stamina = HORSE.staminaMax;
     this.staminaExhausted = false;
 
-    // Unmounted AI state.
-    this._mode = 'wander'; // 'wander' | 'follow' | 'coming'
-    this._whistled = false;
-    this._wanderTarget = new THREE.Vector3().copy(this.position);
-    this._wanderTimer = 0;
-
     // Mount transition.
     this._mountBlendT = HORSE.mountLerpTime; // start "arrived" (fully unmounted, nothing to blend)
     this._premountPos = new THREE.Vector3();
@@ -93,6 +92,7 @@ export class Horse {
     this.riderPitch = 0; // radians the rider leans forward, eased in with speed
     this.jump = new HorseJump(this); // owns position.y — see horse-jump.js
     this.seat = new HorseSeat(this); // owns where the rider sits — see horse-seat.js
+    this.ai = new HorseAI(this); // owns the unmounted wander/follow/whistle — see horse-ai.js
 
     character.root.position.copy(this.position);
     character.root.rotation.y = this.yaw + HORSE.meshYawOffset;
@@ -117,10 +117,7 @@ export class Horse {
 
   /** Called on an H-key press (edge-detected here, not by the caller). */
   _handleWhistle() {
-    if (!this.mounted) {
-      this._whistled = true;
-      this._mode = 'coming';
-    }
+    if (!this.mounted) this.ai.whistle();
   }
 
   /** Straight-line distance from the horse to a world XZ point. */
@@ -128,7 +125,24 @@ export class Horse {
     return Math.hypot(this.position.x - pos.x, this.position.z - pos.z);
   }
 
-  update(dt, camera, player) {
+  /**
+   * "Currently at a gallop", which is NOT the same signal as
+   * `staminaExhausted` — combat.js gates the reload on this, and confusing the
+   * two is called out in docs/ROADMAP.md. Reads the gait the animation state
+   * machine settled on, hysteresis and all, rather than re-deriving it from a
+   * raw speed that chatters across the threshold.
+   */
+  get isGalloping() {
+    return this.animState === 'gallop';
+  }
+
+  /**
+   * @param {boolean} aiming whether the rider currently has the gun up. Passed
+   *   IN by main.js rather than read from combat state here — horse.js has no
+   *   awareness of combat and docs/ROADMAP.md asked for the coupling to be one
+   *   deliberate flag rather than a new file reaching into private fields.
+   */
+  update(dt, camera, player, aiming = false) {
     const hDown = isPointerLocked() && isKeyDown('KeyH');
     if (hDown && !this._prevHDown) this._handleWhistle();
     this._prevHDown = hDown;
@@ -138,7 +152,8 @@ export class Horse {
     this._prevEDown = eDown;
 
     if (this.mounted) {
-      this._updateMounted(dt, camera);
+      if (aiming) this._updateMountedAiming(dt);
+      else this._updateMounted(dt, camera);
     } else {
       this._updateUnmounted(dt, player);
     }
@@ -209,51 +224,54 @@ export class Horse {
     this._turnToward(dt, moving);
   }
 
-  /** Wander near the player, close the gap if too far, or come running when whistled. */
-  _updateUnmounted(dt, player) {
+  /**
+   * Steering while the rider is aiming. BUILD-PLAN.md: "the horse keeps
+   * steering with A/D, aim and fire work as normal" — so W/S and the gallop
+   * are dropped, and A/D become a direct yaw rate rather than a
+   * camera-relative direction.
+   *
+   * That change of meaning is the point. Unaimed steering points the horse
+   * wherever the camera is looking, which is exactly wrong here: while aiming,
+   * the camera IS the gun, and having the horse chase it would make it
+   * impossible to look at anything you were not also riding at. Reining left
+   * or right while the barrel tracks independently is the whole feel of
+   * shooting from horseback.
+   */
+  _updateMountedAiming(dt) {
+    const inputActive = isPointerLocked();
+    const turn = inputActive ? (isKeyDown('KeyA') ? 1 : 0) - (isKeyDown('KeyD') ? 1 : 0) : 0;
+
+    const prevYaw = this.yaw;
+    this.yaw += turn * HORSE.aimTurnRate * dt;
+
+    // Keep the pace it had, eased down to the aiming cap. A horse under a
+    // rider who has just drawn does not stop dead, and it does not gallop.
+    const capped = Math.min(this.speed, HORSE.aimMaxSpeed);
+    const target = capped * Math.exp(-HORSE.aimSpeedDecay * dt);
+    this._moveDir.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+    this._integrateMovement(dt, target);
     this._isDrainingStamina = false;
 
-    if (this._mode === 'coming') {
-      if (this._distanceTo(player.position) < HORSE.whistleArriveDistance) {
-        this._whistled = false;
-        this._mode = 'wander';
-        this._pickWanderTarget(player.position);
-      }
-    } else if (this._distanceTo(player.position) > HORSE.followTriggerDistance) {
-      this._mode = 'follow';
-    } else if (this._mode === 'follow' && this._distanceTo(player.position) < HORSE.followSettleDistance) {
-      this._mode = 'wander';
-      this._pickWanderTarget(player.position);
-    } else if (this._mode === 'wander') {
-      this._wanderTimer -= dt;
-      const arrived = this._distanceTo(this._wanderTarget) < HORSE.wanderArriveDistance;
-      if (this._wanderTimer <= 0 || arrived) this._pickWanderTarget(player.position);
-    }
-
-    this._moveDir.set(0, 0, 0);
-    let targetSpeed = 0;
-    if (this._mode === 'coming' || this._mode === 'follow') {
-      this._moveDir.set(player.position.x - this.position.x, 0, player.position.z - this.position.z);
-      targetSpeed = HORSE.approachSpeed;
-    } else if (this._distanceTo(player.position) < HORSE.playerAvoidRadius) {
-      this._moveDir.set(this.position.x - player.position.x, 0, this.position.z - player.position.z);
-      targetSpeed = HORSE.walkSpeed;
-    } else {
-      this._moveDir.set(this._wanderTarget.x - this.position.x, 0, this._wanderTarget.z - this.position.z);
-      targetSpeed = HORSE.walkSpeed;
-    }
-    const moving = this._moveDir.lengthSq() > 0.0004;
-    if (moving) this._moveDir.normalize(); else targetSpeed = 0;
-
-    this._integrateMovement(dt, targetSpeed);
-    this._turnToward(dt, moving);
+    // Lean comes from the same yaw-rate maths the normal path uses, but the
+    // yaw was already written above, so this must not turn again — hence the
+    // explicit prevYaw rather than a call to _turnToward().
+    let yawDelta = ((this.yaw - prevYaw + Math.PI) % (Math.PI * 2)) - Math.PI;
+    if (yawDelta < -Math.PI) yawDelta += Math.PI * 2;
+    const yawRate = dt > 0 ? yawDelta / dt : 0;
+    const desiredLean = THREE.MathUtils.clamp(-yawRate * HORSE.leanFactor, -HORSE.leanMax, HORSE.leanMax);
+    this.lean += (desiredLean - this.lean) * (1 - Math.exp(-HORSE.leanDamping * dt));
   }
 
-  _pickWanderTarget(anchor) {
-    const angle = Math.random() * Math.PI * 2;
-    const r = Math.random() * HORSE.wanderRadius;
-    this._wanderTarget.set(anchor.x + Math.cos(angle) * r, 0, anchor.z + Math.sin(angle) * r);
-    this._wanderTimer = THREE.MathUtils.lerp(HORSE.wanderIntervalMin, HORSE.wanderIntervalMax, Math.random());
+  /**
+   * Unmounted movement. The decision (where to go, how fast) is horse-ai.js's;
+   * the integration, turning and lean are the same ones the mounted path uses,
+   * which is what stops the two drifting apart.
+   */
+  _updateUnmounted(dt, player) {
+    this._isDrainingStamina = false;
+    const targetSpeed = this.ai.update(dt, player, this._moveDir);
+    this._integrateMovement(dt, targetSpeed);
+    this._turnToward(dt, targetSpeed > 0);
   }
 
   /** Shared accel/decel integration + XZ position update for both movement modes. */

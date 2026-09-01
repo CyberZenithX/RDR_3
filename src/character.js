@@ -24,7 +24,23 @@ import * as THREE from 'three';
 import { loadGLTF, findClip, measureHeight, enableShadows } from './assets.js';
 import { PlaceholderHuman } from './placeholder-human.js';
 import { RidingPose } from './riding-pose.js';
+import { AimPose } from './aim-pose.js';
+import { createRevolver } from './weapons.js';
 import { PLAYER, ANIM, CLIP_REFERENCE_SPEED, CLIP_CANDIDATES } from './config.js';
+
+/**
+ * What each logical clip degrades to when a model does not ship it, best
+ * first. Round 3's gun clips must fall back to their *unarmed* equivalent,
+ * not to walk — an aiming idle that plays the walk cycle is worse than one
+ * that plays the plain idle under the aim pose.
+ */
+const CLIP_FALLBACKS = {
+  idle: ['idle', 'walk'],
+  walk: ['walk', 'idle'],
+  run: ['run', 'walk', 'idle'],
+  idleGun: ['idleGun', 'idle', 'walk'],
+  runGun: ['runGun', 'run', 'walk', 'idle'],
+};
 
 const _hipWorld = new THREE.Vector3();
 const _rootWorld = new THREE.Vector3();
@@ -69,6 +85,19 @@ class PlayerCharacterRig {
     this._ridingSway = 0;
     this._ridingJump = 0;
 
+    // Round 3's aiming layer. It runs immediately after the riding pose and
+    // claims a disjoint set of bones — see aim-pose.js's header for the split
+    // and for why it borrows the riding pose's grip machinery rather than
+    // re-deriving it. Its baseline is captured here, at the same moment and
+    // for the same reason: before the mixer has ever run.
+    this.aim = new AimPose(this.root, this.pose);
+    this.aim.captureBaseline();
+    this._aim = { weight: 0, elevation: 0, recoil: 0, reload: 0, support: 1 };
+
+    // The revolver is parented into the hand bone, so it lives with the rig
+    // rather than with combat.js — which owns when it fires, not where it is.
+    this.weapon = createRevolver(this.root);
+
     // How high the pelvis rides above the rig's own origin. horse.js's saddle
     // offset is a *seat* height, so player.js places the root this far below it
     // — a seated rider is positioned by their hips, not by feet they aren't
@@ -108,11 +137,24 @@ class PlayerCharacterRig {
    */
   setAirborne(_airborne) {}
 
-  /** Falls back to walk, then idle, if the requested clip doesn't exist on this model. */
+  /**
+   * The aiming pose this frame — the same shape setRidingPose has, and read
+   * from combat.js's `poseState()` by player.js. See aim-pose.js for what
+   * each number does to the skeleton.
+   */
+  setAimPose({ weight = 0, elevation = 0, recoil = 0, reload = 0, support = 1 } = {}) {
+    this._aim.weight = weight;
+    this._aim.elevation = elevation;
+    this._aim.recoil = recoil;
+    this._aim.reload = reload;
+    this._aim.support = support;
+  }
+
+  /** Walks this clip's fallback chain (see CLIP_FALLBACKS) to the first one the model actually ships. */
   _resolveAvailable(name) {
-    if (this.actions[name]) return name;
-    if (this.actions.walk) return 'walk';
-    if (this.actions.idle) return 'idle';
+    for (const candidate of CLIP_FALLBACKS[name] ?? [name, 'walk', 'idle']) {
+      if (this.actions[candidate]) return candidate;
+    }
     return null;
   }
 
@@ -125,14 +167,26 @@ class PlayerCharacterRig {
     this._activeName = name;
   }
 
-  setLocomotion(state, speed) {
-    const target = this._resolveAvailable(state);
+  /**
+   * @param {'idle'|'walk'|'run'} state the logical gait player.js decided on.
+   * @param {number} speed real horizontal speed, for the clip's timeScale.
+   * @param {boolean} aiming swaps in this rig's real gun clips underneath the
+   *   aim pose, so the legs and stance are animation rather than something
+   *   aim-pose.js has to author. Walk and run share one gun clip — Run_Shoot
+   *   is the only moving armed clip on this rig (docs/ANIMATION.md), and its
+   *   timeScale already tracks real speed, so a walking aim is the same clip
+   *   played slower rather than a second one that does not exist.
+   */
+  setLocomotion(state, speed, aiming = false) {
+    const wanted = aiming ? (state === 'idle' ? 'idleGun' : 'runGun') : state;
+    const target = this._resolveAvailable(wanted);
     if (target) this._activate(target);
     if (!this._active) return;
     const ref = CLIP_REFERENCE_SPEED[this._activeName] ?? 1;
     // No foot IK in this project — matching timeScale to real speed is the only
     // thing keeping the walk from sliding like it's on ice.
-    this._active.timeScale = this._activeName === 'idle'
+    const stationary = this._activeName === 'idle' || this._activeName === 'idleGun';
+    this._active.timeScale = stationary
       ? 1
       : THREE.MathUtils.clamp(speed / ref, ANIM.minTimeScale, ANIM.maxTimeScale);
   }
@@ -144,6 +198,12 @@ class PlayerCharacterRig {
     // at weight 0 — that is how the pose knows to let go of the bones no clip
     // will reclaim on its own. See riding-pose.js.
     this.pose.apply(this._ridingWeight, this._ridingSway, this._ridingJump);
+    // ...and strictly after that: the aiming layer takes the arms and chest
+    // back off the riding pose while the gun is up, which is the partial
+    // blend BUILD-PLAN.md asks for. `hold` is 1 unconditionally — the
+    // revolver is in the fist whether or not it is raised, and this rig's
+    // rest pose is a flat open palm.
+    this.aim.apply(this._aim.weight, this._aim.elevation, this._aim.recoil, this._aim.reload, this._aim.support, 1);
   }
 }
 

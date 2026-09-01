@@ -273,6 +273,107 @@ touching a file, it belongs in that file's "Before modifying" block in
 `CLAUDE.md`; everything else belongs in `docs/`. The failure mode this guards
 against is the old one — a handoff note nobody can afford to read in full.
 
+### ADR-023 — Combat tunables live in `config-combat.js` — *Accepted*
+
+The same split ADR-009 made for the horse, for the same reason and with the
+same rule. `config.js` was at 354 of BUILD-PLAN.md's 400-line cap before round
+3, and combat is the largest single block of tunables in the game (the gun,
+ballistics, the aim pose, six kinds of effect, the target range and the audio).
+
+**Decision.** `src/config-combat.js` holds `GUN`, `COMBAT`, `AIM_POSE`, `VFX`,
+`TARGETS` and `AUDIO`. `config.js` keeps the round-3 numbers that belong to
+systems it already owned — `CAMERA`'s aim framing, `PLAYER.aimTurnRate`, the
+gun entries in `CLIP_CANDIDATES` / `CLIP_REFERENCE_SPEED`.
+
+**The dividing line, restated:** a number lives with the *system it is a
+property of*, not with the round that introduced it. So the mounted and
+airborne accuracy penalties are in **`config-horse.js`**, because they are
+properties of shooting from a horse, not properties of the gun — a rifle added
+in round 6 would use the same penalties unchanged.
+
+BUILD-PLAN.md's rule is "every tunable in one findable place", and three files
+named after their systems still satisfies it. Four would start not to; if
+round 5 needs another, consider whether it is really a new system first.
+
+### ADR-024 — Aiming is a hand-authored pose layer, not the rig's shoot clips — *Accepted*
+
+**Context.** `player.glb` ships `Gun_Shoot`, `Idle_Gun`, `Idle_Gun_Pointing`
+and `Run_Shoot` — real, good clips. ANIMATION.md's own substitution table says
+no procedural recoil is *needed*. Using them for the whole of aiming looks
+like the obvious call.
+
+**Decision.** The clips carry the **base** — `character.js` swaps in
+`Idle_Gun_Pointing` / `Run_Shoot` underneath while aiming on foot, so the legs
+and stance are real animation. The **upper body** is a hand-authored pose,
+`src/aim-pose.js`, applied after the mixer in exactly riding-pose.js's idiom.
+Recoil and the missing `Reload` are angles on that same layer.
+
+**Why.** Three reasons, in order of weight:
+
+1. **A clip points where it was authored.** Round 3's aim mode is
+   over-the-shoulder with a crosshair; a gun that ignores the camera's pitch
+   is not aiming, it is posing. Only a driven pose can track the crosshair.
+2. **A full-body shoot clip cannot coexist with the seated riding pose**,
+   which reclaims the arms every frame after the mixer runs. Mounted shooting
+   is explicitly not optional in BUILD-PLAN.md, so a clip-only path would need
+   a second, different implementation for the saddle. One layer that works in
+   both places beats two that each work in one.
+3. **This project has one success and one failure at this.** The failure was
+   cross-clip retargeting (ADR-008, removed after several tuning passes). The
+   success was `riding-pose.js`. ROADMAP.md's round-3 notes said to budget
+   real time for the blend and to consider the simpler shape first; this is
+   that shape.
+
+**Consequences.** The partial-skeleton blend BUILD-PLAN.md asks for
+("spine-up from one clip, hips-down from the other") is done **by bone
+ownership** rather than by mixing clip weights: riding-pose.js owns the legs,
+feet, `Torso` and the left rein arm; aim-pose.js owns `Chest`, `Head`, the
+right arm and — on foot only — the left support arm. The two never write the
+same bone in the same frame with different intentions, so there is no blend to
+tune. `Gun_Shoot` and `Idle_Gun_Shoot` end up unused; round 6's duel draw
+still has `Idle_Gun_Pointing` available as a real clip.
+
+**The cost:** the aiming upper body is authored numbers, not animation, so it
+is only as good as those numbers — and nobody has watched it move. It is on
+`SMOKE-TEST.md` for the human.
+
+### ADR-025 — Shots are analytic against colliders and the heightfield — *Accepted*
+
+**Context.** BUILD-PLAN.md says "raycast hit detection". The same measurement
+behind ADR-001 and ADR-002 applies: the terrain is 131k triangles with no BVH,
+props are `InstancedMesh`, and `THREE.Raycaster` is a linear scan.
+
+**Decision.** `combat-ray.js` tests colliders as upright cylinders (circle +
+the `top` ADR-012 already gave them) and marches the analytic `heightAt` for
+the ground, taking the nearest hit. No mesh raycast anywhere in the shot path.
+
+**Why it is not a compromise here.** Every collider already carries the world
+Y of its own top, which is exactly the height a shot has to clear — so rocks,
+cacti, trees and barrels became shootable with no new registration at all.
+The march's step **grows with distance** (a shot 3m away wants centimetre
+precision, one 200m away does not) and the crossing is bisected afterwards, so
+a 220m shot costs ~90 height samples rather than ~370.
+
+**The known inaccuracy:** a collider circle is not the prop's silhouette, so a
+shot can clip the corner of a rock's collider without visually touching the
+rock — the same approximation the player already walks into. Bottles stand on
+barrel lids and are therefore *not* grounded, which the collider list cannot
+express (its cylinders implicitly run to the ground), so `targets.js` ray-tests
+its own items with an explicit base and runs before the collider pass.
+
+### ADR-026 — The revolver is always in hand; there is no holster — *Accepted*
+
+BUILD-PLAN.md asks for the gun to be attached to the hand bone and never
+mentions holstering, and no round needs a drawn/holstered distinction until
+round 6's duel — which is about *timing the shot*, not about where the gun was
+a second earlier.
+
+**Consequences.** `aim-pose.js` takes a `hold` weight separate from its aim
+weight, applied even at weight 0: this rig's rest pose is a flat splayed palm,
+so without a permanent grip the revolver sits in an open hand any time the arm
+is down. If round 6 wants a real draw, `hold` is already the parameter to
+animate, and the gun's `setVisible()` is already there.
+
 ---
 
 ## Superseded decisions

@@ -152,6 +152,10 @@ export const PLAYER = {
   deceleration: 28,
   airControl: 0.3,
   turnRate: 13, // rad/s the mesh yaws toward its movement direction
+  // ...but while aiming the mesh yaws toward the CAMERA instead, and faster:
+  // the gun has to stay on the crosshair, so a lazy turn reads as the shot
+  // lagging the aim. See player.js's facing block.
+  aimTurnRate: 18,
   // Radians added to the mesh's facing so its modelled -Z axis lines up with
   // its movement direction. Confirmed from a real screenshot: the loaded
   // player.glb faces +Z, not -Z, so it rendered backwards (facing the camera
@@ -187,13 +191,23 @@ export const ANIM = {
  * no foot IK in this project, so these are the only thing keeping the walk off
  * the ice. Tune by eye.
  */
-export const CLIP_REFERENCE_SPEED = { idle: 1, walk: 1.5, run: 4.5 };
+export const CLIP_REFERENCE_SPEED = { idle: 1, walk: 1.5, run: 4.5, idleGun: 1, runGun: 4.5 };
 
-/** Candidates per logical clip, best first. See findClip() in assets.js. */
+/**
+ * Candidates per logical clip, best first. See findClip() in assets.js.
+ *
+ * `idleGun` / `runGun` are round 3's: while aiming on foot, character.js
+ * plays these underneath instead of idle/run, so the legs and stance are real
+ * animation and aim-pose.js only has to author the upper body. Both exist on
+ * this rig (docs/ANIMATION.md); if a model swap loses them, `_resolveAvailable`
+ * falls back to walk/idle and the aim pose still reads, just stiffer.
+ */
 export const CLIP_CANDIDATES = {
   idle: ['Idle', 'Idle_Neutral'],
   walk: ['Walk', 'Walk_Forward'],
   run: ['Run', 'Run_Forward', 'Sprint'],
+  idleGun: ['Idle_Gun_Pointing', 'Idle_Gun', 'Idle_Gun_Shoot'],
+  runGun: ['Run_Shoot', 'Run_Gun', 'Run'],
 };
 
 /** Jump pose for the procedural PlaceholderHuman fallback (no GLTF skeleton to retarget onto). Rotation.x only, positive = bent, same convention as its walk/run swing code. */
@@ -262,6 +276,22 @@ export const CAMERA = {
   // drop off the side of the horse) snaps rather than sweeping the camera
   // vertically across the gap.
   pivotSnapDistance: 3,
+
+  // Round 3's over-the-shoulder aim. These COMPOSE with the mounted pair
+  // above rather than replacing them — camera.js lerps each mounted/on-foot
+  // choice toward its aimed counterpart by the aim weight, so aiming from the
+  // saddle is its own framing instead of one mode overriding the other.
+  aimDistance: 2.5,
+  aimPivotHeight: 1.62,
+  mountedAimDistance: 4.2,
+  mountedAimPivotHeight: 2.05,
+  aimShoulderShift: 0.62, // the pivot slides this far to the player's right
+  aimFov: 42, // narrowed from RENDER.fov (58); camera.js reads its own start value
+  fovLerpRate: 10,
+  // Recoil shake. `shakeDecay` is an exponential rate, `shakeMax` stops a
+  // six-shot string from stacking into an earthquake.
+  shakeDecay: 13,
+  shakeMax: 0.16,
 };
 
 export const INPUT = {

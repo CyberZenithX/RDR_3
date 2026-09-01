@@ -196,6 +196,54 @@ reads the same as they do standing still:
 
 The last three sample the arc from **inside** the render loop.
 
+**Round 3 — guns**
+
+- all three `.ogg` files actually loaded. `audio.js` never throws on a missing
+  file (BUILD-PLAN.md's rule), so *asking what it failed to load* is the only
+  way a silent gunfight gets noticed
+- the revolver hangs off `WristR` — the dot-stripped runtime name — and its
+  world scale is life-sized, which is the check that the armature's baked scale
+  is being divided back out rather than inherited
+- the muzzle empty is **not** under the camera, and turning the character
+  moves it. The second half matters: a muzzle welded to the world would pass a
+  pure ancestry test while aiming every shot from a fixed point in space
+- aiming narrows the FOV and pulls the camera in, read off the camera's own
+  live values so the easing path is covered too
+- barrel colliders carry a real, finite `top` (so the horse can still jump
+  one) and a `meta.target` back-reference
+- **a fired shot hits a target directly in front**, end to end through the
+  real `tryFire()` → muzzle → `combat-ray` path
+- ammo decrements per shot, the cylinder does not refill until the lockout
+  *ends*, the gun refuses to fire mid-reload, and an empty gun does not go
+  negative
+- a bottle breaks in one hit and a barrel in two; a destroyed target is
+  unregistered from the collider list **and** its instance matrix is zeroed
+- the reload gate reads the **gait**, not stamina — asserted in both
+  directions: refused at a gallop with a full tank, allowed at a walk with an
+  exhausted one. That second half is the one with teeth
+- aiming raises the gun hand in the horse's body frame **without** moving the
+  knees, which is the partial-skeleton split (ADR-024) measured rather than
+  assumed
+- the aim pose is idempotent across frames, the same compounding-delta guard
+  the riding pose carries
+- spread is a real cone and rides in the right order: aimed < hip, and each
+  gets worse in the saddle
+
+Two recipes worth reusing:
+
+- **Forcing the aim state.** Headless cannot produce a trusted pointer-locked
+  mouse button, so `combat.setAimOverride(true|false|null)` is a public entry
+  point in the same spirit as `horse.handleMountToggle` (rule 4 below).
+- **Aiming a shot at something.** Do **not** solve the camera onto the target.
+  The camera looks at its own pivot plus `CAMERA.shoulderOffset`, so a yaw/pitch
+  derived analytically from a target position misses by more than a barrel's
+  width at 14m. Instead read the camera's LIVE `getWorldDirection()` and move
+  the target onto that ray. Zero `COMBAT.spreadHip`/`spreadAim` for the
+  duration (restore after) so the check tests the aiming chain, not the dice.
+- **Cooldowns bite the next check, not this one.** A shot leaves
+  `COMBAT.fireInterval` behind it; the ammo check timed out once because it
+  fired immediately after the hit check. Wait on `combat.canFire` first.
+
 ---
 
 ## Screenshots without the Browser pane
@@ -248,14 +296,30 @@ scripts/smoke.mjs`:
 
 - `player.glb` renamed (round 1): game stayed fully playable, absence surfaced
   as one console warning, not a crash.
+- `player.glb` renamed (round 3): **it did not.** The game showed "failed to
+  start", rendered zero frames, and failed sixteen checks — because
+  `main.js` parented the muzzle flash to `character.weapon.muzzle` and the
+  placeholder rig had no weapon. `init()` threw and everything after it never
+  ran. Fixed by arming the placeholder and guarding the attach; written up in
+  [DEVELOPMENT-NOTES.md](DEVELOPMENT-NOTES.md). **This procedure is the only
+  thing that catches that class of bug, and it very nearly got skipped.**
+  Re-run after the fix: 16 failures down to **3**, and all three are the ones
+  inherent to deleting the file — the 404, its console error, and the check
+  whose whole purpose is asserting the real GLB loaded. Every round-3 check
+  passed against the capsule rig, guns included.
 - `horse.glb` renamed (rounds 2 and 2d): mount, ride, bank, jump, clearance,
   rider-in-the-saddle and dismount all passed against `PlaceholderHorse`. The
   only failures were the four inherent to deleting the file — the 404 itself
   and the checks whose whole purpose is asserting the real GLB loaded.
 
 Do this again whenever a round changes the character interface
-(`setLocomotion` / `setAirborne` / `setRidingPose` / `hipHeight`), because the
-placeholders implement that interface independently.
+(`setLocomotion` / `setAirborne` / `setRidingPose` / `setAimPose` /
+`hipHeight`), because the placeholders implement that interface independently.
+**Round 3 changed it**: `setLocomotion` grew an `aiming` argument,
+`setAimPose` is new, and `PlaceholderHuman` now carries `WristR`/`WristL`
+empties purely so `weapons.js`'s generic bone search finds a hand on it too.
+The round-3 skeleton checks self-skip on the placeholder rig, as the round-2b/
+2c/2d ones do.
 
 ---
 

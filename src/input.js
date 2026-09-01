@@ -5,6 +5,7 @@
  */
 
 const keys = new Set();
+const mouseButtons = new Set();
 let mouseDX = 0;
 let mouseDY = 0;
 let locked = false;
@@ -21,8 +22,17 @@ function onMouseMove(e) {
   mouseDX += e.movementX;
   mouseDY += e.movementY;
 }
+function onMouseDown(e) {
+  if (locked) mouseButtons.add(e.button);
+}
+function onMouseUp(e) {
+  mouseButtons.delete(e.button);
+}
 function onPointerLockChange(canvas) {
   locked = document.pointerLockElement === canvas;
+  // A lock lost mid-shot (Esc, alt-tab) must not leave the trigger held down —
+  // the game pauses, and it should not resume already firing.
+  if (!locked) mouseButtons.clear();
   for (const fn of lockListeners) fn(locked);
 }
 
@@ -31,6 +41,13 @@ export function initInput(canvas) {
   addEventListener('keydown', onKeyDown);
   addEventListener('keyup', onKeyUp);
   addEventListener('mousemove', onMouseMove);
+  addEventListener('mousedown', onMouseDown);
+  // On `window`, not the canvas: a button released outside the canvas (or over
+  // an overlay) must still clear, or aim-down-sights sticks on forever.
+  addEventListener('mouseup', onMouseUp);
+  // Right mouse is the aim button, so its context menu has to go — otherwise
+  // every attempt to aim opens a menu over the game.
+  addEventListener('contextmenu', (e) => { if (locked) e.preventDefault(); });
   document.addEventListener('pointerlockchange', () => onPointerLockChange(canvas));
   // Listen on document, not canvas: the #clickToPlay overlay sits visually on
   // top of the canvas (later in the DOM, pointer-events: auto in index.html)
@@ -44,6 +61,11 @@ export function initInput(canvas) {
 
 export function isKeyDown(code) {
   return keys.has(code);
+}
+
+/** 0 = left (fire), 2 = right (aim), the DOM's own MouseEvent.button numbering. */
+export function isMouseDown(button) {
+  return mouseButtons.has(button);
 }
 
 export function isPointerLocked() {

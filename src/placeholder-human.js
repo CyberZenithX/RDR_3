@@ -7,12 +7,20 @@
  * speed each frame, which is cheap and never desyncs from movement.
  *
  * Implements the same small interface character.js expects from a real GLTF
- * rig: `root`, `height`, `setLocomotion(state, speed)`, `update(dt)`.
+ * rig: `root`, `height`, `setLocomotion(state, speed, aiming)`,
+ * `setAirborne(bool)`, `setRidingPose(...)`, `setAimPose(...)`, `update(dt)`.
+ *
+ * Round 3 note: the elbow of each arm carries an empty named `WristR`/`WristL`
+ * where a hand would be, purely so weapons.js's generic bone search finds one
+ * here too and the revolver is held rather than floating at the root. That is
+ * the only concession this file makes to the real rig's naming.
  */
 
 import * as THREE from 'three';
 import { PLACEHOLDER, COLORS, ANIM, PLAYER, JUMP } from './config.js';
 import { RIDING_POSE } from './config-horse.js';
+import { AIM_POSE } from './config-combat.js';
+import { createRevolver } from './weapons.js';
 
 function buildSegment(radius, halfLength, material) {
   const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(radius, halfLength * 2, 4, 8), material);
@@ -56,9 +64,14 @@ export class PlaceholderHuman {
       const elbow = new THREE.Group();
       elbow.position.y = -(cfg.armLength / 2 + cfg.armRadius * 2);
       elbow.add(buildSegment(cfg.armRadius * 0.85, cfg.armLength / 4, skinMat));
+      // Where a hand would be, named so weapons.js's bone search finds it.
+      const hand = new THREE.Group();
+      hand.name = `Wrist${key}`;
+      hand.position.y = -(cfg.armLength / 2 + cfg.armRadius * 2);
+      elbow.add(hand);
       shoulder.add(elbow);
       this.hips.add(shoulder);
-      this.arms[key] = { shoulder, elbow };
+      this.arms[key] = { shoulder, elbow, hand };
 
       const hipJoint = new THREE.Group();
       hipJoint.position.set(side * cfg.hipWidth, 0, 0);
@@ -81,13 +94,33 @@ export class PlaceholderHuman {
     this._ridingWeight = 0;
     this._ridingSway = 0;
     this._ridingJump = 0;
+    this._aimWeight = 0;
+    this._aimElevation = 0;
+    this._aimRecoil = 0;
+    this._aimReload = 0;
     // Matches the real rig's own measured pelvis height, so horse.js's saddle
     // offset means the same thing whichever rig is in play.
     this.hipHeight = PLACEHOLDER.hipHeight;
+
+    // The placeholder is armed too. BUILD-PLAN.md's rule is that a missing GLB
+    // must leave the game **fully playable**, and a round-3 game you cannot
+    // shoot in is not that — main.js parents the muzzle flash to
+    // `character.weapon.muzzle` and combat.js fires from it, so an unarmed
+    // fallback rig took the whole boot sequence down with a TypeError. That
+    // is exactly the crash the rule exists to prevent, and it was caught by
+    // re-running the smoke suite with player.glb renamed away
+    // (docs/TESTING.md). The `Wrist*` empties above exist so weapons.js's
+    // generic bone search finds a hand here with no special-casing; this rig's
+    // root scale is 1, so its offsets need no scale correction either.
+    this.weapon = createRevolver(this.root);
   }
 
-  /** Uniform interface with the real rig — `state` is unused here since speed alone drives the gait. */
-  setLocomotion(_state, speed) {
+  /**
+   * Uniform interface with the real rig — `state` and `aiming` are unused
+   * here: speed alone drives the gait, and the aiming stance is applied as a
+   * pose overlay in update() rather than by swapping clips this rig has none of.
+   */
+  setLocomotion(_state, speed, _aiming = false) {
     this._speed = speed;
   }
 
@@ -109,6 +142,18 @@ export class PlaceholderHuman {
     // rigid capsules have no such subtlety, so it folds in as a little extra
     // forward carriage rather than being ignored outright.
     this._ridingJump = THREE.MathUtils.clamp(jump, 0, 1);
+  }
+
+  /**
+   * Same interface as the real rig's aim pose (see aim-pose.js), done with
+   * plain group rotations. `support` and the finger grip have no meaning on
+   * rigid capsules with no hands, so they are accepted and ignored.
+   */
+  setAimPose({ weight = 0, elevation = 0, recoil = 0, reload = 0 } = {}) {
+    this._aimWeight = THREE.MathUtils.clamp(weight, 0, 1);
+    this._aimElevation = elevation;
+    this._aimRecoil = THREE.MathUtils.clamp(recoil, 0, 1);
+    this._aimReload = THREE.MathUtils.clamp(reload, 0, 1);
   }
 
   update(dt) {
@@ -176,6 +221,31 @@ export class PlaceholderHuman {
         this.legs[key].hip.rotation.z *= 1 - ease;
         this.arms[key].shoulder.rotation.z *= 1 - ease;
         this.arms[key].elbow.rotation.x *= 1 - ease;
+      }
+    }
+
+    // Aiming, over everything above — last, for the same reason aim-pose.js
+    // runs last on the real rig: while the gun is up it owns the arms
+    // outright, whether the pose underneath is a walk cycle or a saddle.
+    if (this._aimWeight > 0.002) {
+      const w = this._aimWeight;
+      const lerp = THREE.MathUtils.lerp;
+      const elev = THREE.MathUtils.clamp(this._aimElevation, AIM_POSE.elevationMin, AIM_POSE.elevationMax)
+        * AIM_POSE.elevationFollow;
+      const armX = -(AIM_POSE.armPitch + elev)
+        + AIM_POSE.recoilArmPitch * this._aimRecoil
+        + AIM_POSE.reloadArmDrop * this._aimReload;
+      const right = this.arms.R;
+      right.shoulder.rotation.x = lerp(right.shoulder.rotation.x, armX, w);
+      right.shoulder.rotation.z = lerp(right.shoulder.rotation.z, AIM_POSE.armIn, w);
+      right.elbow.rotation.x = lerp(right.elbow.rotation.x, -AIM_POSE.elbowBend, w);
+      // The left arm only comes up as support when it is free to — mounted,
+      // it is holding the reins, which the riding pose above has just set.
+      if (this._ridingWeight <= 0.002) {
+        const left = this.arms.L;
+        left.shoulder.rotation.x = lerp(left.shoulder.rotation.x, -(AIM_POSE.supportArmPitch + elev), w);
+        left.shoulder.rotation.z = lerp(left.shoulder.rotation.z, -AIM_POSE.supportArmIn, w);
+        left.elbow.rotation.x = lerp(left.elbow.rotation.x, -AIM_POSE.supportElbowBend, w);
       }
     }
   }

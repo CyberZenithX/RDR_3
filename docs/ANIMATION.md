@@ -166,6 +166,31 @@ head-forward-of-hips, ~0.2m — which is far above the noise floor).
 
 ---
 
+### Parenting anything into this rig inherits a 101x scale
+
+Measured directly on the live skeleton: `WristR`'s **world scale is 101.45**.
+The GLB has a scale of ~100 baked into the armature, and the character root's
+own rescale-to-`PLAYER.modelHeight` does not undo it — it compounds with it.
+
+Anything `add()`ed to a bone inherits that. `reins.js` sidesteps the problem
+by refusing to parent at all (a rein spans both rigs anyway); round 3's
+revolver cannot, because it has to follow the fist exactly, so `weapons.js`
+measures `handBone.getWorldScale()` at attach time and divides it straight back
+out. That is what lets `GUN.holdPosition` and `GUN.muzzleOffset` be written in
+plain metres.
+
+**A bone's rest orientation is equally unreadable** — this is a baked-IK rig,
+so `WristR`'s axes are arbitrary (measured: its local +Z points
+`(-0.89, 0.45, 0.09)` in the character's own frame, i.e. out to the side).
+There is no sensible angle to guess for a held object. `GUN.holdRotation` was
+**solved numerically** off the live skeleton: the bone-space rotation that
+sends the gun's barrel axis onto the character root's forward axis. Do the same
+for anything else placed in a hand — a rifle, a bottle, a lantern.
+
+Useful measurements while you are there: wrist to knuckles is **0.146m** on
+this rig, and the finger direction in the wrist's own frame is
+`(-0.013, 0.109, -0.096)`.
+
 ## The horse rig
 
 `RootNode` → `AnimalArmature`, with `Head`. 68 nodes, 1 skinned mesh. **No
@@ -206,11 +231,22 @@ Of the clips rounds 1–7 need, only **`Reload`** is genuinely missing.
   hand-authored pose on this skeleton.
 - **Horse jump → the clip is real, the arc is not.** `Gallop_Jump` supplies
   legs only; the ballistic arc is integrated in code. See [HORSE.md](HORSE.md).
-- **Mounted shooting → partial-skeleton blend** of `Idle_Gun_Shoot` over the
-  riding pose. Round 3 owns it; see [ROADMAP.md](ROADMAP.md) for why to budget
-  real time for it.
+- **Aiming and mounted shooting → a hand-authored pose layer**,
+  `src/aim-pose.js`, round 3. Not a clip blend: the clips carry the *base*
+  (`Idle_Gun_Pointing` when still, `Run_Shoot` when moving, on foot only) and
+  the upper body is authored. The partial-skeleton split BUILD-PLAN.md asks
+  for is done **by bone ownership**, not by mixing clip weights — riding-pose
+  keeps the legs, feet, `Torso` and the left rein arm; aim-pose takes `Chest`,
+  `Head`, the right arm and (on foot) the left support arm. Full reasoning in
+  [DECISIONS.md](DECISIONS.md) ADR-024. `Gun_Shoot` and `Idle_Gun_Shoot` end
+  up unused as a result.
+- **`Reload` → the gun dips below frame**, per BUILD-PLAN.md's table, as
+  angles on that same aim layer rather than as a separate bone hack.
+- **Recoil → procedural after all.** This file used to say none was needed
+  because `Gun_Shoot` is real. It is real, and it is still not used: one
+  recoil that works both on foot and in the saddle beats a clip on foot plus
+  a pose in the saddle. Same ADR.
 - **Duel draw (round 6)** → `Idle_Gun_Pointing`.
-- **No procedural recoil needed** — `Gun_Shoot` is a real clip.
 - **Airborne on foot** → no clip. `ANIM.airTimeScale` slows whatever
   locomotion clip is playing. `character.setAirborne()` is a no-op on the real
   rig (the placeholder has its own procedural crouch).
@@ -265,8 +301,13 @@ the mirrored right hand right with no per-hand sign.
 
 Without a grip the rider holds the reins with two splayed open palms: the rest
 pose is flat-handed and the idle clip curls only the left hand's fingers.
-**Round 3's revolver grip should reuse `_captureGripAxes()` / `_grip()`, not
-re-derive this.**
+**Round 3's revolver grip reuses `_captureGripAxes()` / `_grip()`** rather
+than re-deriving this — `aim-pose.js` holds a reference to the rig's
+`RidingPose` and calls `_grip(curl, thumbCurl, ['R'])` for the gun hand alone
+(the `sides` argument was added for exactly that). The grip is driven by a
+`hold` weight *independent of the aim weight*, because the revolver is in the
+fist whether or not it is raised (ADR-026) and the rest pose is a flat open
+palm.
 
 ---
 

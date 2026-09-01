@@ -401,6 +401,96 @@ runs where the network doesn't. See
 [ARCHITECTURE.md](ARCHITECTURE.md#file-map-in-full) for how to add another
 addon.
 
+
+## The revolver came out of the fist sideways
+
+**Round 3.** With `GUN.holdRotation` at `(0, 0, 0)` the gun pointed
+`(-0.89, 0.45, 0.09)` in the character's own frame — out to the right and up,
+roughly perpendicular to the aim line. In the first screenshots it read as a
+dark lump in the hand rather than as a gun.
+
+**Cause, and why it was never going to be guessable.** `player.glb` is a
+**baked-IK rig**, so a bone's rest orientation carries no convention at all:
+`WristR`'s local +Z happens to point out of the side of the hand. There is no
+"obvious" angle for a held object on this skeleton, and no amount of nudging
+three Euler numbers by eye converges quickly on one.
+
+**Fix: solve it, don't guess it.** A throwaway probe read the bone's live
+world quaternion and computed the bone-space rotation that sends the gun's own
++Z (the barrel) onto the character root's forward axis, with world up as the
+roll reference — `(-1.467, 0.557, 1.984)`. The same probe produced
+`holdPosition` by asking where the gun's *grip* (not its origin, which is the
+back of the frame) has to sit to land in the middle of the palm, 55% of the way
+from the wrist joint to the knuckles.
+
+The same probe caught a second thing worth having on record: **`WristR`'s world
+scale is 101.45.** The GLB bakes ~100× into the armature and the character
+root's rescale-to-1.85m compounds with it rather than cancelling it, so a
+parented mesh renders at a hundred times life size. `weapons.js` measures and
+divides it out at attach time, which is what lets every offset in `GUN` be
+written in plain metres.
+
+**The lesson generalises.** Anything else placed in a hand on this rig — a
+rifle, a lantern, a bottle, round 6's duel props — should be solved the same
+way rather than eyeballed, and the probe pattern (launch headless, force the
+pose, read live world transforms, print numbers) is ten minutes of work.
+
+## An unarmed placeholder rig took the whole boot sequence down
+
+**Round 3, and the most serious bug of the round.** Caught only by
+`docs/TESTING.md`'s "rename the GLB away and re-run smoke" procedure — which
+is exactly what that procedure is for, and which nearly got skipped.
+
+**Symptom.** With `models/player.glb` renamed away, the game did not fall back
+to the capsule placeholder and keep playing. It showed **"failed to start —
+see console"**, no frames ever rendered, and *sixteen* smoke checks failed at
+once, most of them round-2 checks that had nothing to do with guns.
+
+**Cause.** One line in `main.js`:
+
+```js
+vfx.attachToMuzzle(character.weapon.muzzle);
+```
+
+`createRevolver()` had been wired into `PlayerCharacterRig` but not into
+`PlaceholderHuman`, so on the fallback path `character.weapon` was `undefined`,
+that line threw a TypeError, `init()` unwound, and **everything after it never
+ran** — audio, combat, the click-to-play handler, the render loop. Round 2's
+horse and reins were fine; they simply never got to exist.
+
+**This is precisely the failure BUILD-PLAN.md's rule exists to prevent:** "If a
+`.glb` is missing or fails to load, do not crash… keep the game fully playable.
+**This rule holds for every round.**"
+
+**Fix, in two parts, because either alone is not enough.**
+
+1. `PlaceholderHuman` is armed too — it already carried `WristR`/`WristL`
+   empties so `weapons.js`'s generic bone search finds a hand, so this was one
+   `createRevolver(this.root)`. A round-3 game you cannot shoot in is not
+   "fully playable" either.
+2. `main.js` guards the attach, and `combat.js` tolerates a null weapon
+   (`canFire`, `tryReload`, `_ejectShells`). A future rig that cannot hold a
+   gun should lose the muzzle flash, not the game.
+
+**The general lesson.** A crash in the boot sequence is a *cliff*, not a
+degradation: everything downstream of the throw silently ceases to exist, and
+the failures surface far from the cause. Anything `init()` does with an
+optional asset needs a guard, and every round that touches the character
+interface must re-run the renamed-GLB check — the placeholders implement that
+interface independently and nothing else tests them.
+
+## The aiming support hand drifted away from the gun at high elevation
+
+**Round 3, caught in a screenshot.** Aiming level looked right; aiming ~26° up
+put the two hands visibly apart, because the left arm was written to follow
+only *half* the camera's elevation (`elev * 0.5`) while the right followed all
+of it. There is no IK here to close a gap, so the arms have to be swung
+together. Changed to the full elevation on both.
+
+It is still a posed approximation, not a solved grip — the hands never actually
+touch, and how close they read varies with angle. That is in `SMOKE-TEST.md`
+as something for the human to judge rather than something claimed as fixed.
+
 ---
 
 ## Two harness bugs that produced false passes

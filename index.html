@@ -47,6 +47,43 @@
     transition: width 0.08s linear, background-color 0.2s ease;
   }
   #staminaFill.exhausted { background: #6b2f1f; }
+
+  /* Crosshair — only while aiming, per BUILD-PLAN.md's round 3. Four ticks
+     around a centre dot: it reads against both the pale sky and dark rock
+     without needing an outline, because each arm carries its own shadow. */
+  #crosshair {
+    position: fixed; left: 50%; top: 50%; width: 26px; height: 26px;
+    transform: translate(-50%, -50%) scale(0.7); pointer-events: none;
+    opacity: 0; transition: opacity 0.12s ease, transform 0.12s ease;
+  }
+  #crosshair.visible { opacity: 0.92; transform: translate(-50%, -50%) scale(1); }
+  #crosshair i {
+    position: absolute; background: #f4e6c8; box-shadow: 0 0 2px #000;
+    left: 50%; top: 50%;
+  }
+  #crosshair i:nth-child(1) { width: 2px; height: 7px; margin: -13px 0 0 -1px; }
+  #crosshair i:nth-child(2) { width: 2px; height: 7px; margin: 6px 0 0 -1px; }
+  #crosshair i:nth-child(3) { width: 7px; height: 2px; margin: -1px 0 0 -13px; }
+  #crosshair i:nth-child(4) { width: 7px; height: 2px; margin: -1px 0 0 6px; }
+  #crosshair i:nth-child(5) { width: 2px; height: 2px; margin: -1px 0 0 -1px; }
+
+  /* Ammo counter: six pips plus a numeral, so a glance is enough. */
+  #ammo {
+    position: fixed; right: 3vw; bottom: 5vh; pointer-events: none;
+    display: flex; align-items: center; gap: 10px;
+    font: 600 20px/1 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    color: #e8d9b8; text-shadow: 0 1px 4px #000;
+    opacity: 0; transition: opacity 0.3s ease;
+  }
+  #ammo.visible { opacity: 1; }
+  #ammoPips { display: flex; gap: 4px; }
+  #ammoPips b {
+    display: block; width: 5px; height: 13px; border-radius: 1px;
+    background: #d9a441; box-shadow: 0 0 3px #000;
+    transition: background-color 0.12s ease, opacity 0.12s ease;
+  }
+  #ammoPips b.spent { background: #4a3a28; opacity: 0.55; }
+  #ammo.reloading #ammoCount { color: #b5541f; }
 </style>
 </head>
 <body>
@@ -59,11 +96,14 @@
 <div id="clickToPlay" class="overlay hidden">
   <h1>DUST &amp; IRON</h1>
   <p>click to play</p>
-  <p class="hint">WASD move &middot; Shift sprint &middot; Space jump &middot; H whistle horse &middot; E mount/dismount &middot; mouse look &middot; Esc to release</p>
+  <p class="hint">WASD move &middot; Shift sprint &middot; Space jump &middot; H whistle horse &middot; E mount/dismount</p>
+  <p class="hint">right mouse aim &middot; left mouse fire &middot; R reload &middot; mouse look &middot; Esc to release</p>
 </div>
 
 <div id="boundaryWarning"><span>you are leaving the territory</span></div>
 <div id="staminaBar"><div id="staminaFill"></div></div>
+<div id="crosshair"><i></i><i></i><i></i><i></i><i></i></div>
+<div id="ammo"><span id="ammoPips"></span><span id="ammoCount">6</span></div>
 
 <script type="importmap">
 {

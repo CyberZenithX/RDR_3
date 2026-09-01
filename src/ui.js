@@ -5,6 +5,7 @@
  */
 
 import { UI } from './config.js';
+import { COMBAT } from './config-combat.js';
 
 export function initUI() {
   const loading = document.getElementById('loading');
@@ -13,7 +14,25 @@ export function initUI() {
   const boundaryWarning = document.getElementById('boundaryWarning');
   const staminaBar = document.getElementById('staminaBar');
   const staminaFill = document.getElementById('staminaFill');
+  const crosshair = document.getElementById('crosshair');
+  const ammo = document.getElementById('ammo');
+  const ammoCount = document.getElementById('ammoCount');
+  const ammoPips = document.getElementById('ammoPips');
   let boundaryOpacity = 0;
+
+  // One pip per chamber, built from COMBAT.magazine so a bigger cylinder is
+  // still one number in one file. Markup lives in index.html for everything
+  // that is fixed; this is the one piece that is not.
+  const pips = [];
+  if (ammoPips) {
+    for (let i = 0; i < COMBAT.magazine; i++) {
+      const pip = document.createElement('b');
+      ammoPips.appendChild(pip);
+      pips.push(pip);
+    }
+  }
+  let shownAmmo = -1;
+  let shownReloading = null;
 
   return {
     setLoadingText(text) {
@@ -43,6 +62,30 @@ export function initUI() {
       if (!staminaFill) return;
       staminaFill.style.width = `${Math.round(stamina * 100)}%`;
       staminaFill.classList.toggle('exhausted', exhausted);
+    },
+
+    /** Shows the crosshair only while the gun is up. `weight` is combat.js's 0..1 aim blend. */
+    setAiming(weight) {
+      crosshair?.classList.toggle('visible', weight > 0.5);
+    },
+
+    /**
+     * The ammo counter. Guarded on the values actually changing: this runs
+     * every frame, and rewriting six pips' class lists 60 times a second to
+     * say the same thing is the kind of free waste that adds up.
+     */
+    updateAmmo(rounds, reloading) {
+      if (!ammo) return;
+      ammo.classList.add('visible');
+      if (rounds !== shownAmmo) {
+        shownAmmo = rounds;
+        if (ammoCount) ammoCount.textContent = String(rounds);
+        for (let i = 0; i < pips.length; i++) pips[i].classList.toggle('spent', i >= rounds);
+      }
+      if (reloading !== shownReloading) {
+        shownReloading = reloading;
+        ammo.classList.toggle('reloading', reloading);
+      }
     },
   };
 }

@@ -15,11 +15,15 @@ Related: [ANIMATION.md](ANIMATION.md) (rig/clip mechanics) ·
   Adding a runtime dep — even `three-mesh-bvh` — is a decision to raise with
   the human first, not to make silently.
 - **400 lines per source file, hard cap** (BUILD-PLAN.md). This is why
-  `config-horse.js`, `horse-jump.js` and `horse-seat.js` exist as separate
+  `config-horse.js`, `horse-jump.js`, `horse-seat.js`, `horse-ai.js`,
+  `config-combat.js`, `combat-ray.js` and `weapons.js` exist as separate
   files. When a file approaches the cap, split along a real seam and leave
   room for the *next* round, not just this one.
-- Everything tunable is a named constant in `src/config.js` or
-  `src/config-horse.js`. No magic numbers inline.
+- Everything tunable is a named constant in `src/config.js`,
+  `src/config-horse.js` or `src/config-combat.js`. No magic numbers inline.
+  A number lives with the **system it is a property of**, not with the round
+  that added it — which is why the mounted accuracy penalty is in the horse's
+  file, not the gun's (ADR-009, ADR-023).
 
 ---
 
@@ -34,17 +38,32 @@ sRGB output, `PCFSoftShadowMap`), the async load sequence, and owns the
 
 **The per-frame order is load-bearing. Do not "simplify" it:**
 
-1. `horse.update()` — may flip `player.mounted` in *either* direction this
-   frame (it owns the E key and calls `player.mount()` / `player.dismount()`).
-2. `if (player.mounted)` — read **fresh**, after step 1 — sync
+1. `combat.pollInput()` — reads the mouse and `R`, moves the aim blend, ticks
+   the reload/cooldown timers. **Does not fire.** It runs first because step 2
+   needs `combat.aiming` to decide how the horse steers.
+2. `horse.update(dt, camera, player, aiming)` — may flip `player.mounted` in
+   *either* direction this frame (it owns the E key and calls `player.mount()`
+   / `player.dismount()`).
+3. `if (player.mounted)` — read **fresh**, after step 2 — sync
    `player.position` / `meshYaw` / `setSaddle()` from
    `horse.getSaddleTransform()`.
-3. `player.update()` — full on-foot physics, or the mounted early-return
-   branch.
-4. `reins.update(player.mounted)` — after **both** rigs are posed, so the
+4. `player.update(dt, camera, combat)` — full on-foot physics, or the mounted
+   early-return branch. Either way it hands `combat.poseState()` to the rig,
+   so `character.update()` poses the arms for this frame.
+5. `reins.update(player.mounted)` — after **both** rigs are posed, so the
    straps land on this frame's mouth and fists.
-5. `tpCamera.setMounted(...)` / `ui.setMounted(...)` — called unconditionally
-   every frame off `player.mounted`; both are idempotent, no edge detection.
+6. `combat.update()` — **fires** any shot queued in step 1. It runs here, not
+   in step 1, because a shot starts at the muzzle empty and the muzzle is on
+   the end of a barrel held by a hand that only just finished moving. Firing
+   in `pollInput()` aims every shot from last frame's hand position.
+7. `tpCamera.setMounted(...)` / `setAiming(...)` / `ui.setMounted(...)` /
+   `setAiming(...)` / `updateAmmo(...)` — called unconditionally every frame
+   off live state; all idempotent, no edge detection.
+
+**Combat's frame is deliberately split in two around the rest of the world**
+(steps 1 and 6). Collapsing it into one call breaks one of those two things:
+early, and the horse steers as though nobody is aiming; late, and every shot
+is aimed a frame stale.
 
 The obvious-looking alternative (branch on `horse.mounted` *before* calling
 `horse.update()`) was tried and is a real same-frame bug: a dismount flips the
@@ -195,10 +214,26 @@ gait-following, jump-lifted seat point, and is the whole implementation of
 `getSaddleTransform()`. Both readings are taken in the horse's own body frame,
 never world axes.
 
+`src/aim-pose.js` — `AimPose`: the upper-body aiming pose — right arm out
+along the sightline, elbow soft, spine turned into it, plus the recoil kick
+and the reload dip. Runs immediately **after** `RidingPose` and claims a
+disjoint set of bones (`Chest`, `Head`, the right arm, and on foot the left
+support arm); that bone split, not a clip blend, is how mounted shooting
+composes with the seated pose. Borrows `RidingPose._grip()` /
+`_captureGripAxes()` for the hand rather than re-deriving them. ADR-024.
+
 `src/riding-pose.js` — `RidingPose`: the seated pose, built bone by bone.
 `captureBaseline()` once at load; `apply(weight, sway, jump)` every frame
 *after* `mixer.update()`. Also derives the finger-grip axes. Read its header
 and [ANIMATION.md](ANIMATION.md) before touching any pose code.
+
+`src/horse-ai.js` — `HorseAI`: what the horse does with nobody on it —
+wander / follow / come-when-whistled, plus stepping out of the player's way.
+Owns **no** position and no velocity: it writes a direction and returns a
+target speed, and `horse.js` integrates both through exactly the same movement
+code the mounted path uses. Split out in round 3 when the aiming steering
+pushed `horse.js` to 407 lines. Round 5's hitching post is the next entry in
+its `mode` machine.
 
 `src/reins.js` — `Reins`: the bridle and rein straps `horse.glb` doesn't ship.
 Rebuilds ~6 straps as square tubes into one shared buffer every frame from
@@ -206,6 +241,51 @@ live bone positions, rather than parenting anything into either skeleton (a
 rein spans *both* rigs, and both carry large baked armature scales a parented
 mesh would inherit). **Reusable for any strap-like geometry** — a rifle sling,
 a holster belt, a hitching rope.
+
+### Combat
+
+`src/weapons.js` — `Revolver` / `createRevolver(rig)`. Builds the revolver
+procedurally (no gun GLB is fetchable — see [ASSETS.md](ASSETS.md)), finds a
+hand bone by case-insensitive candidate list, parents the gun to it, and
+**divides the bone's live world scale back out** so `GUN.holdPosition` and
+`GUN.muzzleOffset` can be written in plain metres. Owns `muzzle`, the empty
+that every shot's raycast starts from and the flash is parented to. Written
+against *any* loaded skeleton, so round 4 arms a bandit with the same call.
+
+`src/combat.js` — `Combat`. Aim state, fire, reload, ammo, spread, recoil,
+and what a shot does when it lands. **Its frame is split in two** —
+`pollInput()` before `horse.update()`, `update()` after the rig is posed; see
+the per-frame order above. The only coupling to the horse is an `aiming` flag
+passed *in* to `horse.update()`. Public test/AI surface: `tryFire()`,
+`tryReload()`, `setAimOverride()`, `canFire`, `canReload`, `currentSpread`,
+`poseState()`, `lastHit`.
+
+`src/combat-ray.js` — what a bullet hits: `raycastCylinder` (one upright
+cylinder, both end caps), `raycastColliders` (the whole collider array, each
+running ground-to-`top`), `raycastTerrain` (a growing-step march of `heightAt`
+with a bisection refine). No mesh raycasts anywhere — ADR-025. Each writes
+into a shared hit record only if it beats what is already there, so a caller
+tests targets, colliders and terrain against one object and keeps the nearest.
+
+`src/targets.js` — `Targets`: the shootable barrels and the bottles standing
+on them. props.js's pattern plus the thing props do not have — **per-instance
+destructible state**. A dead target is hidden by a zero-scale instance matrix
+and has its collider unregistered in the same step; killing a barrel takes its
+bottles with it. Barrels carry a real `top`, so the horse can jump one.
+
+`src/vfx.js` — muzzle flash (+ point light), tracer, impact sparks, decals,
+spent shells and target debris. **Fixed pools allocated once**; nothing is
+created or disposed while the game runs, so the whole file is five draw calls
+whether the screen is empty or full. The flash is *parented to the muzzle*,
+not positioned at it each frame.
+
+`src/audio.js` — `GameAudio` / `createAudio(camera, scene)`. `THREE.AudioListener`
+on the camera, round-robined `PositionalAudio` voices per sound.
+**Never throws and never rejects**: a missing file is one warning and silence,
+so `play()` on a game with an empty `audio/` is a no-op. `resume()` is wired to
+the pointer-lock click, which is the user gesture browsers require before an
+AudioContext may start. Round 7's looping ambience wants a `loop()` alongside
+`play()`, not a reshape of it.
 
 ### Camera, input, UI
 
@@ -221,9 +301,21 @@ controllable entity should use them rather than reinventing yaw math.
 `setMounted(bool)` swaps `CAMERA.distance`/`pivotHeight`/`swayRun` for the
 `mounted*` variants. `snap()` / `update()` take an optional `ignoreCollider`
 (main.js passes `horse.collider` while mounted — mandatory, see ADR-017).
+`setAiming(weight)` takes combat.js's **0..1 blend**, not a bool, so the
+camera, the aim pose and the crosshair all move on one curve. Aim and mounted
+**compose**: `_baseDistance()` / `_pivotHeight()` pick the mounted-or-not pair
+and then lerp toward its aimed counterpart, so aiming from the saddle is its
+own framing rather than one mode overriding the other. `addRecoil(pitch,
+shake)` is the shot's kick — additive, so fanning the hammer stacks, capped by
+`CAMERA.shakeMax`.
 
-`src/input.js` — keyboard `Set`, pointer lock (`initInput(canvas)`), raw
+`src/input.js` — keyboard `Set`, **mouse-button `Set`** (`isMouseDown(button)`,
+DOM numbering: 0 fire, 2 aim), pointer lock (`initInput(canvas)`), raw
 `movementX/Y` accumulation (`consumeMouseDelta`), `onPointerLockChanged(fn)`.
+`mouseup` is bound to `window`, not the canvas, so a button released off-canvas
+still clears; losing pointer lock clears every held button, so Esc mid-burst
+does not resume firing. `contextmenu` is prevented while locked — right mouse
+is the aim button.
 The pointer-lock click listener is bound to `document`, not the canvas —
 **if a future round adds overlay UI that should be clickable without starting
 play, that listener needs an `e.target` guard**; it currently assumes any
@@ -233,8 +325,11 @@ click anywhere means "start playing."
 boundary-warning opacity, stamina bar visibility (`setMounted(bool)`) and
 fill/exhausted color (`updateStamina(fraction, exhausted)` — a **0..1
 fraction**, so `main.js` passes `horse.staminaFraction`; `HORSE.staminaMax` is
-1 today, has been 1.5, and this module is not allowed to know either way). All
-markup lives in `index.html`.
+1 today, has been 1.5, and this module is not allowed to know either way), the
+crosshair (`setAiming(weight)`) and the ammo counter (`updateAmmo(rounds,
+reloading)`, guarded so it only touches the DOM when the numbers change). All
+markup lives in `index.html` — the one exception is the ammo pips, built from
+`COMBAT.magazine` so a bigger cylinder stays one number in one file.
 
 `src/config.js` — every tunable **except the horse's own**, grouped by system:
 `RENDER`, `COLORS`, `SKY`, `SUN`, `FOG`, `WORLD`, `TERRAIN`, `TOWN`,
@@ -283,8 +378,14 @@ resolveCollisions(pos, radius, ignore, clearY)
 - **Moving colliders**: `addCircleCollider` **once**, then mutate the returned
   object's `.x` / `.z` every frame. Never re-add/remove per frame. The horse is
   the reference implementation; round 4's bandits should follow it.
-- `meta.kind` is `'rock'` / `'cactus'` / `'tree'` on props. Round 3's shootable
-  barrels should follow that convention.
+- `meta.kind` is `'rock'` / `'cactus'` / `'tree'` on props and `'barrel'` on
+  round 3's targets; the horse's own collider is `'horse'`. Barrel colliders
+  also carry `meta.target`, a back-reference to the destructible item, which is
+  how a hit is attributed without a second lookup.
+- **Removing a collider is a real operation now.** `targets.js` calls
+  `removeCollider` when something is destroyed. Anything holding a collider
+  reference across frames must tolerate it disappearing — `combat.js` keeps the
+  horse's in an ignore Set, which is safe because the horse is never destroyed.
 - Buildings (round 5) will be the first real users of `resolveBox`.
 
 ---
@@ -326,6 +427,25 @@ resolveCollisions(pos, radius, ignore, clearY)
   should reuse them.
 - `findClip` / `loadGLTF` / `enableShadows` — reuse for the bandit loader.
 
+**Combat surface** (round 4's bandits and round 6's duels build on this)
+
+- `character.weapon` — the `Revolver`. `muzzle` is the empty a shot starts
+  from; `syncWorld()` refreshes its matrix from the skeleton up, which must be
+  called before reading it mid-frame.
+- `character.setAimPose({weight, elevation, recoil, reload, support})` — the
+  same shape `setRidingPose` has. Both `PlayerCharacterRig` and
+  `PlaceholderHuman` implement it.
+- `Combat.tryFire()` / `tryReload()` / `setAimOverride(v)` — public entry
+  points, for the same reason `horse.handleMountToggle` is (ADR-011).
+- `Combat.canFire` / `canReload` / `currentSpread` / `aiming` / `aimWeight` /
+  `ammo` / `reloading` / `lastHit`.
+- `Horse.isGalloping` — the **gait**, not `staminaExhausted`. The reload gate
+  reads this; confusing the two is backwards in both directions.
+- `Targets.raycast(origin, dir, maxDist, out)` / `hit(item)` / `aliveCount`.
+- `makeHit()` / `resetHit()` / `raycastCylinder` / `raycastColliders` /
+  `raycastTerrain` — the whole geometry query, reusable for bandit
+  line-of-sight in round 4.
+
 **three.js version gotcha**: 0.160.0 does **not** have `THREE.MathUtils.damp`
 (added upstream later). `camera.js` hand-rolls exponential smoothing. Re-check
 before adding a `MathUtils.damp` call anywhere.
@@ -345,7 +465,15 @@ playerPos  cameraPos  cameraDistanceToPlayer
 cameraCurrentDistance  cameraFov
 horsePos  horseStamina  mounted
 horseAirborne  horseVelocityY  horseJumpWeight
+aiming  aimWeight  ammo  reloading  shotsFired
+targetCounts  targetsAlive  audioMissing
+targets  combat  renderer                   (live object references)
 ```
+
+`renderer` is there so `renderer.info.render.calls` — BUILD-PLAN.md's ~120
+draw-call budget — can be read without wiring it up again. Round 7 owns the
+real performance pass; this is a floor that catches a round quietly adding
+fifty.
 
 `window.__frames` / `window.__ready` are kept alive every frame for the smoke
 harness. `window.__debug.horse` is the live `Horse`; its public
@@ -361,8 +489,9 @@ existed only while there was a retargeted player jump clip.
 
 - **No wind sway on grass** — round 7 owns the shader; grass is static
   geometry, instanced and player-following.
-- **No audio at all.** `audio/` is empty. Round 3 is the first round that
-  touches it (`gunshot.ogg`, `reload.ogg`, `hit.ogg`); round 7 the rest.
+- **Audio is three one-shots only.** `gunshot.ogg` / `reload.ogg` /
+  `hit.ogg` are in and wired (all CC0 — provenance in [ASSETS.md](ASSETS.md)).
+  Round 7 owns the looping ambience and the master mute.
 - **Camera `lookAt` is recomputed instantly from a damped position**, not
   itself damped — could look slightly swimmy for a frame or two right after a
   big obstruction-triggered zoom-in. Not visually confirmed; minor.

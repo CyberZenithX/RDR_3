@@ -146,6 +146,23 @@ export const HORSE = {
   // big the tank gets, rather than the punishment scaling with the buff.
   staminaExhaustedFloor: 0.04, // gallop is refused at/below this...
   staminaExhaustedRecover: 0.22, // ...until stamina climbs back above this (hysteresis, no flicker)
+
+  // ------------------------------------------------------ mounted combat ---
+  // Round 3. These live here rather than in config-combat.js because they are
+  // properties of shooting FROM A HORSE, not properties of the gun (ADR-009).
+
+  // Multipliers on the shot's spread cone, so they scale hip fire and aimed
+  // fire together instead of flattening the difference between them.
+  mountedAccuracyPenalty: 2.4,
+  jumpAccuracyPenalty: 1.9, // stacked on top, while the horse is over an obstacle
+
+  // While the rider is aiming, W/S and the gallop are dropped and the horse
+  // steers on A/D alone (BUILD-PLAN.md: "the horse keeps steering with A/D").
+  // It keeps whatever pace it had, capped, rather than coasting to a halt —
+  // stopping dead the moment the gun comes up is not what a horse does.
+  aimTurnRate: 1.35, // rad/s of yaw from a held A or D
+  aimMaxSpeed: 5.2, // the pace an aiming rider is held to, m/s
+  aimSpeedDecay: 0.55, // per second, toward that cap
 };
 
 /** Speed → locomotion state hysteresis, mirrors player.js's classifySpeed but with the horse's own thresholds. */

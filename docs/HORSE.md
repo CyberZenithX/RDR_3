@@ -423,6 +423,16 @@ All dimensions live in `TACK` in `config-horse.js`, in the horse's head frame.
 - `_updateUnmounted` — wander / follow / whistle AI.
 - `_updateMounted` — WASD relative to the camera (`getForward()`/`getRight()`),
   gallop gated by stamina.
+- `_updateMountedAiming` — round 3. While the rider has the gun up, **W/S and
+  the gallop drop out entirely and A/D become a direct yaw rate**
+  (`HORSE.aimTurnRate`), with the horse holding whatever pace it had, capped at
+  `HORSE.aimMaxSpeed` and decaying gently toward it. BUILD-PLAN.md asks for
+  this ("the horse keeps steering with A/D"), and the change of *meaning* is
+  the point: unaimed steering points the horse wherever the camera looks, which
+  is exactly wrong while aiming, because the camera is the gun. Reining
+  left/right while the barrel tracks independently is the whole feel of
+  shooting from horseback. `aiming` is passed **in** to `horse.update()` by
+  main.js — horse.js has no other awareness of combat.
 
 **`HORSE.staminaMax` is 1, but nothing may assume that.** It was raised to 1.5
 after a play session and then put back to 1 on the human's call, so the tank is
@@ -439,6 +449,11 @@ rendered the bar at 150% width when the tank was 1.5, and is guarded by a smoke
 check that reads the bar's rendered width. Because raw and fraction are the
 same number at a tank of 1, that check resizes the tank itself for one frame
 rather than trusting the current value to expose the bug.
+
+**`horse.isGalloping` is the gait signal**, added round 3: it reads
+`animState === 'gallop'`, hysteresis and all, rather than re-deriving a gait
+from a raw speed that chatters across the threshold. `combat.js`'s reload gate
+uses it. Do not substitute `staminaExhausted` — see immediately below.
 
 Stamina drains only while galloping and gates whether a gallop request is
 honoured. `staminaExhausted` is **not** the same signal as "currently
@@ -469,6 +484,9 @@ real bugs twice (rounds 2b and 2c both started as "this looks wrong in play").
 | Stamina | gallop too short/long, recovery unclear | `staminaMax` (the tank, 1), `staminaDrainRate`, `staminaRegenRate`, `staminaExhaustedFloor`, `staminaExhaustedRecover` |
 | Riding pose in motion | bob amplitude, forward carriage at speed | `HORSE.saddleFollow`, `riderLean`, `riderGallopPitch`, `riderBobSway`, `RIDING_POSE.sway*` |
 | Jump feel | arc, 0.89s hang, pitch, camera lag | `jumpSpeed`, `gravity`, `jumpPitch*`, `jumpPoseBlendRate`, `jumpSeatRise`, `riderJumpFollow`, `RIDING_POSE.jump*`, `CAMERA.pivotFollowRate` |
+| Steering while aiming | too twitchy / coasts to a stop / too fast | `HORSE.aimTurnRate`, `aimMaxSpeed`, `aimSpeedDecay` |
+| Mounted accuracy | shooting from the saddle too easy or hopeless | `HORSE.mountedAccuracyPenalty`, `jumpAccuracyPenalty` (both multiply `COMBAT.spread*`) |
+| Mounted aim framing | camera too close/far with the gun up in the saddle | `CAMERA.mountedAimDistance`, `mountedAimPivotHeight`, `aimShoulderShift` |
 | Horse's own height over a jump | the clip's 0.75 body rise stacks on the 1.51 arc, unjudged | `jumpSpeed`; or cancel the clip's rise rather than following it (a design change, see above) |
 
 **`saddleSway` carries a large constant negative bias while moving, and

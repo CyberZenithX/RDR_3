@@ -141,7 +141,17 @@ export class Player {
     this.character.root.rotation.set(0, this.meshYaw + PLAYER.meshYawOffset, 0);
   }
 
-  update(dt, camera) {
+  /**
+   * @param {object|null} combat round 3's Combat, or null. Passed in rather
+   *   than imported so the player still runs standalone (and so smoke.mjs can
+   *   drive it without one). It supplies two things: the aiming flag, which
+   *   changes what the character faces and which clips play, and the pose
+   *   state handed straight through to the rig — see combat.js's poseState().
+   */
+  update(dt, camera, combat = null) {
+    const aiming = !!combat?.aiming;
+    if (combat) this.character.setAimPose(combat.poseState());
+
     if (this.mounted) {
       // Position/meshYaw are already set by main.js from horse.getSaddleTransform()
       // this frame — this just keeps the visual rig in sync and poses it into
@@ -149,6 +159,10 @@ export class Player {
       // overwrites the bones it writes, every frame, after the mixer runs.
       this.speed = 0;
       this.boundaryProximity = 0;
+      // Mounted, the base clip stays the plain idle whether or not the gun is
+      // up: the riding pose overwrites the whole body anyway, and swapping in
+      // a standing gun clip underneath it changes nothing you can see while
+      // costing a crossfade every time the trigger finger moves.
       this.character.setLocomotion('idle', 0);
       this.character.setAirborne(false);
       this.character.setRidingPose(this.rideBlend, this.rideSway, this.rideJump);
@@ -247,7 +261,14 @@ export class Player {
     // exactly once, below, when it's turned into a render rotation. Baking
     // it in here too would double it up the moment the player moves.
     this.speed = this.velocityXZ.length();
-    if (this._moveDir.lengthSq() > 0.0001) {
+    if (aiming) {
+      // Over-the-shoulder aiming turns the body to the camera, not to the
+      // direction of travel: the gun has to point at the crosshair, and the
+      // crosshair is the camera. Strafing away from where you are looking is
+      // then a real, deliberate difference from unaimed movement rather than
+      // a bug — it is what backing away from something while covering it is.
+      this.meshYaw = lerpAngle(this.meshYaw, camera.yaw, Math.min(1, PLAYER.aimTurnRate * dt));
+    } else if (this._moveDir.lengthSq() > 0.0001) {
       const targetYaw = Math.atan2(-this._moveDir.x, -this._moveDir.z);
       this.meshYaw = lerpAngle(this.meshYaw, targetYaw, Math.min(1, PLAYER.turnRate * dt));
     }
@@ -255,7 +276,7 @@ export class Player {
     // ---------------------------------------------------------- anim ---
     this.animState = classifySpeed(this.speed, this.animState);
     const animSpeed = this.grounded ? this.speed : this.speed * ANIM.airTimeScale;
-    this.character.setLocomotion(this.animState, animSpeed);
+    this.character.setLocomotion(this.animState, animSpeed, aiming);
     this.character.setAirborne(!this.grounded);
     this.character.update(dt);
 
