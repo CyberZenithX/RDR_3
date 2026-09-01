@@ -212,6 +212,127 @@ const CHECKS = [
     const tooSmall = factors.filter((f) => f < 1.2);
     return tooSmall.length === 0 ? null : `colliderFactors ${JSON.stringify(factors)} has values below the 1.2 safety floor`;
   }],
+  // Round 2 ----------------------------------------------------------------
+  ['horse.glb loaded (not the capsule placeholder)', async () => {
+    const loaded = await page.evaluate(() => window.__debug?.modelsLoaded?.horse);
+    return loaded === true ? null : `modelsLoaded.horse was ${JSON.stringify(loaded)}`;
+  }],
+  ['horse y settles onto the terrain (not falling forever)', async () => {
+    const y0 = await page.evaluate(() => window.__debug?.horsePos?.y);
+    await page.waitForTimeout(800);
+    const y1 = await page.evaluate(() => window.__debug?.horsePos?.y);
+    if (typeof y0 !== 'number' || typeof y1 !== 'number' || !Number.isFinite(y1)) {
+      return `horsePos.y not numeric (${y0} -> ${y1})`;
+    }
+    return Math.abs(y1 - y0) < 0.5 ? null : `horsePos.y still moving fast at rest: ${y0} -> ${y1}`;
+  }],
+  ['horse stays inside the world boundary while wandering', async () => {
+    const info = await page.evaluate(async () => {
+      const cfg = await import('/src/config.js');
+      const p = window.__debug.horse.position;
+      const dist = Math.hypot(p.x - cfg.TOWN.centerX, p.z - cfg.TOWN.centerZ);
+      return { dist, limit: cfg.BOUNDARY.playerLimit };
+    });
+    return info.dist <= info.limit + 1 ? null : `horse is ${info.dist.toFixed(1)} from center, past the ${info.limit} boundary clamp`;
+  }],
+  ['horse model scale is plausibly horse-sized, not the 4.8m raw bind-pose box', async () => {
+    // Regression guard for the round-1-flagged bug this round resolves:
+    // horse.glb's raw bind-pose bounding box measures 4.83m tall — see
+    // HORSE.modelScale's comment in config-horse.js for the full measurement
+    // writeup. character.root.scale.x should be the small hardcoded factor
+    // (~0.58), not 1 (unscaled) and not some measureHeight()-derived value.
+    const scale = await page.evaluate(() => window.__debug?.horse?.character?.root?.scale?.x);
+    if (typeof scale !== 'number') return `horse character root scale missing (${scale})`;
+    return scale > 0.2 && scale < 0.9 ? null : `horse modelScale is ${scale} — expected roughly HORSE.modelScale (~0.58)`;
+  }],
+  ['mount attaches the player to the horse\'s saddle', async () => {
+    // Exercises mounting via the public Horse.handleMountToggle(player) hook
+    // (see its own doc comment in horse.js) instead of simulating real
+    // pointer-locked keyboard input, per CLAUDE.md's round 2 plan.
+    const before = await page.evaluate(() => {
+      const d = window.__debug;
+      const h = d.horse;
+      d.player.position.set(h.position.x + 1, h.position.y, h.position.z);
+      d.player.meshYaw = 0;
+      h.handleMountToggle(d.player);
+      return { mounted: d.player.mounted };
+    });
+    if (before.mounted !== true) return `handleMountToggle while in range did not mount (player.mounted=${before.mounted})`;
+    // Wait for enough SIMULATED time (not wall-clock — headless chromium's
+    // software rasterizer runs at ~3-4fps here, and RENDER.maxDeltaTime caps
+    // how much sim time each slow frame can contribute) to finish the 0.4s
+    // saddle-lerp. A fixed wall-clock sleep flaked here at ~700ms.
+    // NOTE: the predicate must be SYNCHRONOUS — an async predicate (`await
+    // import(...)` inside it) resolves waitForFunction on its first poll
+    // regardless of the real boolean result in this Playwright version
+    // (confirmed directly: it returned after one poll with the condition
+    // still false). Fetch the threshold with a plain awaited evaluate first.
+    const mountLerpTime = await page.evaluate(async () => (await import('/src/config-horse.js')).HORSE.mountLerpTime);
+    await page.waitForFunction((t) => window.__debug.horse._mountBlendT >= t, mountLerpTime, { timeout: 20000 });
+    const after = await page.evaluate(async () => {
+      const cfg = await import('/src/config-horse.js');
+      const h = window.__debug.horse;
+      const p = window.__debug.player;
+      const dx = p.position.x - h.position.x, dz = p.position.z - h.position.z;
+      const horizOffset = Math.hypot(dx, dz);
+      const expectedHoriz = Math.hypot(cfg.HORSE.saddleOffset.x, cfg.HORSE.saddleOffset.z);
+      const vertOffset = p.position.y - h.position.y;
+      return { mounted: p.mounted, horizOffset, expectedHoriz, vertOffset, expectedVert: cfg.HORSE.saddleOffset.y };
+    });
+    if (after.mounted !== true) return 'player un-mounted itself unexpectedly while riding';
+    if (Math.abs(after.horizOffset - after.expectedHoriz) > 0.15) {
+      return `saddle horizontal offset is ${after.horizOffset.toFixed(2)}, expected ~${after.expectedHoriz.toFixed(2)}`;
+    }
+    if (Math.abs(after.vertOffset - after.expectedVert) > 0.15) {
+      return `saddle vertical offset is ${after.vertOffset.toFixed(2)}, expected ~${after.expectedVert.toFixed(2)}`;
+    }
+    return null;
+  }],
+  ['mounted camera does not collapse onto the horse\'s own collider', async () => {
+    // Regression guard for a real bug: the horse registers a persistent
+    // circle collider (for terrain/prop collision, and so a riderless horse
+    // blocks the player on foot) that stays live while mounted too — and
+    // the rider's camera pivot sits right on/inside it (saddle offset is
+    // tiny). Without excluding it, every direction the mounted camera swept
+    // immediately "hit" the horse itself and collapsed to CAMERA.minDistance
+    // — confirmed via screenshot: the camera was inside the player's head.
+    // Fixed by threading an ignoreCollider through
+    // ThirdPersonCamera._maxUnobstructedDistance/update (see camera.js).
+    const info = await page.evaluate(async () => {
+      const cfg = await import('/src/config.js');
+      return { mounted: window.__debug.player.mounted, dist: window.__debug.tpCamera.currentDistance, min: cfg.CAMERA.minDistance, target: cfg.CAMERA.mountedDistance };
+    });
+    if (info.mounted !== true) return `expected player still mounted from the previous check (mounted=${info.mounted})`;
+    return info.dist > info.min + 1 ? null : `mounted camera currentDistance is ${info.dist.toFixed(2)}, close to minDistance (${info.min}) — expected near mountedDistance (${info.target})`;
+  }],
+  ['dismount releases the player back onto the terrain', async () => {
+    const result = await page.evaluate(async () => {
+      const cfg = await import('/src/config.js');
+      const h = window.__debug.horse;
+      const p = window.__debug.player;
+      h.handleMountToggle(p); // player was left mounted by the previous check
+      const groundY = (await import('/src/terrain.js')).groundHeightAt(p.position.x, p.position.z);
+      return { mounted: p.mounted, y: p.position.y, groundY };
+    });
+    if (result.mounted !== false) return 'handleMountToggle while mounted did not dismount';
+    return Math.abs(result.y - result.groundY) < 0.5 ? null : `dismounted player.position.y (${result.y}) is not on the ground (${result.groundY})`;
+  }],
+  ['horse collider is registered exactly once, even after a mount/dismount cycle', async () => {
+    const count = await page.evaluate(async () => {
+      const { colliders } = await import('/src/collision.js');
+      return colliders.filter((c) => c.meta?.kind === 'horse').length;
+    });
+    return count === 1 ? null : `expected exactly 1 horse collider, found ${count}`;
+  }],
+  ['horse stamina stays within [0, staminaMax]', async () => {
+    const info = await page.evaluate(async () => {
+      const cfg = await import('/src/config-horse.js');
+      return { stamina: window.__debug?.horse?.stamina, max: cfg.HORSE.staminaMax };
+    });
+    if (typeof info.stamina !== 'number') return `horse.stamina missing (${info.stamina})`;
+    return info.stamina >= 0 && info.stamina <= info.max ? null : `horse.stamina is ${info.stamina}, expected within [0, ${info.max}]`;
+  }],
+
   ['no leftover jump clip on the real player rig (removed feature)', async () => {
     // Regression guard for the opposite direction now: the retargeted jump
     // clip (retarget.js + config.js's ANIM_SOURCE/HIP_FOLLOW/KNEE_FOLLOW)

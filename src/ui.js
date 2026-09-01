@@ -11,6 +11,8 @@ export function initUI() {
   const loadingStatus = document.getElementById('loadingStatus');
   const clickToPlay = document.getElementById('clickToPlay');
   const boundaryWarning = document.getElementById('boundaryWarning');
+  const staminaBar = document.getElementById('staminaBar');
+  const staminaFill = document.getElementById('staminaFill');
   let boundaryOpacity = 0;
 
   return {
@@ -31,6 +33,16 @@ export function initUI() {
       const delta = target - boundaryOpacity;
       boundaryOpacity += Math.sign(delta) * Math.min(Math.abs(delta), rate * dt);
       boundaryWarning.style.opacity = boundaryOpacity.toFixed(3);
+    },
+    /** Shows/hides the stamina bar — only relevant while mounted. */
+    setMounted(mounted) {
+      staminaBar?.classList.toggle('visible', mounted);
+    },
+    /** stamina is 0..1, exhausted is whether a gallop is currently refused. */
+    updateStamina(stamina, exhausted) {
+      if (!staminaFill) return;
+      staminaFill.style.width = `${Math.round(stamina * 100)}%`;
+      staminaFill.classList.toggle('exhausted', exhausted);
     },
   };
 }

@@ -15,7 +15,7 @@ The spec is `BUILD-PLAN.md`. It wins over anything here.
 |---|---|---|
 | 0 — assets | **done** | `round-0` |
 | 1 — world and player | **done** | `round-1` |
-| 2 — horse | not started | |
+| 2 — horse | **done** | `round-2` |
 | 3 — guns | not started | |
 | 4 — bandits | not started | |
 | 5 — town | not started | |
@@ -30,33 +30,37 @@ One line per file. Read only what the round needs.
 
 | File | What's in it |
 |---|---|
-| `index.html` | Import map (points `three`/`three/addons/` at `/vendor/three/`, not a CDN — see "Known rough edges") + overlay markup (loading screen, click-to-play, boundary-warning vignette) + CSS + a data-URI favicon. Boots `/src/main.js` as a module. No inline game code anymore. |
+| `index.html` | Import map (points `three`/`three/addons/` at `/vendor/three/`, not a CDN — see "Known rough edges") + overlay markup (loading screen, click-to-play, boundary-warning vignette, stamina bar) + CSS + a data-URI favicon. Boots `/src/main.js` as a module. No inline game code anymore. |
 | `vendor/three/` | three.js **0.160.0**, vendored from the npm package (not a submodule, not `node_modules` — committed files). Only what the codebase imports: `build/three.module.js`, `examples/jsm/loaders/GLTFLoader.js`, `examples/jsm/utils/BufferGeometryUtils.js`, `LICENSE`. See "Known rough edges" for why (CDN-loaded three.js made `scripts/smoke.mjs` unrunnable in egress-restricted sessions) and how to extend it if a later round imports another addon. |
 | `BUILD-PLAN.md` | The spec. Read every round. |
 | `CLAUDE.md` | This file. |
 | `SMOKE-TEST.md` | Manual checklist for the human. Grow it every round, never delete a line. |
 | `scripts/verify-models.mjs` | Prints size / mesh / skin / clip-name report for every `models/*.glb`. Run after touching models. |
-| `scripts/smoke.mjs` | Headless check. Serves the folder on :8917, loads it in chromium, fails on any console error, uncaught exception, 4xx/failed request, or a render loop that never started. `CHECKS` array now also asserts: player.glb loaded (not placeholder), player Y settles (doesn't fall forever), player is grounded, all three prop kinds scattered with count > 0, character scale/mesh-yaw-offset sane, rock collider factors floor, and that no jump-clip action ever gets constructed (the retarget pipeline was removed — see "Known rough edges"). **Add to `CHECKS` every round.** Launches chromium through a fallback (`launchChromium()`): if Playwright's own browser build is missing it tries every chromium actually on disk (`PLAYWRIGHT_BROWSERS_PATH`, then `/usr/bin/chromium*`), or whatever `SMOKE_CHROMIUM=/path/to/chrome` names — needed because sandboxes ship a pre-installed chromium whose build number doesn't match `node_modules`. |
+| `scripts/smoke.mjs` | Headless check. Serves the folder on :8917, loads it in chromium, fails on any console error, uncaught exception, 4xx/failed request, or a render loop that never started. `CHECKS` array now also asserts (round 1): player.glb loaded (not placeholder), player Y settles (doesn't fall forever), player is grounded, all three prop kinds scattered with count > 0, character scale/mesh-yaw-offset sane, rock collider factors floor, no leftover jump-clip action; (round 2): horse.glb loaded (not placeholder), horse Y settles, horse stays inside the boundary, horse model scale is sane (not the raw 4.8m bind-pose box), mount attaches the player to the saddle within tolerance, the mounted camera doesn't collapse onto the horse's own collider, dismount lands the player on the ground, the horse's collider is registered exactly once even across a mount/dismount cycle, and stamina stays in `[0, staminaMax]`. **Add to `CHECKS` every round.** Launches chromium through a fallback (`launchChromium()`): if Playwright's own browser build is missing it tries every chromium actually on disk (`PLAYWRIGHT_BROWSERS_PATH`, then `/usr/bin/chromium*`), or whatever `SMOKE_CHROMIUM=/path/to/chrome` names — needed because sandboxes ship a pre-installed chromium whose build number doesn't match `node_modules`. **Gotcha found this round, will bite any future check that uses it:** `page.waitForFunction()` with an `async` predicate (one that does `await import(...)` inside) resolves on its *first poll*, regardless of the real return value, in this Playwright version — confirmed directly (a mount-lerp-completion check "resolved" after one poll while the real condition was still false, and a follow-up read showed the un-finished value). Fetch anything you need from a dynamic `import()` in a separate, plain `await page.evaluate()` first, then pass the result in as a `waitForFunction` argument so the polled predicate itself is synchronous. |
 | `.claude/commands/round.md` | `/round N` slash command. |
-| `.claude/launch.json` | Added this round so the Browser-preview tool can serve the project (`npx serve . -l 5311`) for visual spot-checks. Not part of the shipped game. |
+| `.claude/launch.json` | Added round 1 so the Browser-preview tool can serve the project (`npx serve . -l 5311`) for visual spot-checks. Not part of the shipped game. Still unused directly — screenshots this round, like round 1's, went through throwaway Playwright scripts instead (see "Known rough edges"). |
 | `models/` | `player.glb`, `bandit.glb`, `horse.glb`. See inventory below. |
 | `audio/` | Still empty. Round 3 fetches `gunshot.ogg`, `reload.ogg`, `hit.ogg`; round 7 fetches the rest. |
-| `src/config.js` | Every tunable number, grouped by system (`RENDER`, `COLORS`, `SKY`, `SUN`, `FOG`, `WORLD`, `TERRAIN`, `TOWN`, `BOUNDARY`, `MESAS`, `SPAWN`, `PLAYER`, `ANIM`, `CLIP_REFERENCE_SPEED`, `CLIP_CANDIDATES`, `JUMP`, `PLACEHOLDER`, `CAMERA`, `INPUT`, `PROPS`, `GRASS`, `UI`). No jump-clip retarget config anymore (`ANIM_SOURCE`/`HIP_FOLLOW`/`KNEE_FOLLOW` were removed along with the feature — see "Known rough edges"); `JUMP` is placeholder-only fallback pose constants. Read this first when tuning anything. |
+| `src/config.js` | Every tunable number **except the horse's own** (see `config-horse.js`), grouped by system (`RENDER`, `COLORS`, `SKY`, `SUN`, `FOG`, `WORLD`, `TERRAIN`, `TOWN`, `BOUNDARY`, `MESAS`, `SPAWN`, `PLAYER`, `ANIM`, `CLIP_REFERENCE_SPEED`, `CLIP_CANDIDATES`, `JUMP`, `PLACEHOLDER`, `CAMERA`, `INPUT`, `PROPS`, `GRASS`, `UI`). `CAMERA` grew `mountedDistance`/`mountedPivotHeight`/`mountedSwayRun` this round. No jump-clip retarget config anymore (`ANIM_SOURCE`/`HIP_FOLLOW`/`KNEE_FOLLOW` were removed along with the feature — see "Known rough edges"); `JUMP` is placeholder-only fallback pose constants. Read this first when tuning anything non-horse. |
+| `src/config-horse.js` | Every horse-specific tunable: `HORSE` (model scale/offsets/speeds/AI ranges/mount/stamina), `HORSE_ANIM` (locomotion hysteresis), `HORSE_CLIP_CANDIDATES`, `HORSE_CLIP_REFERENCE_SPEED`, `PLACEHOLDER_HORSE` (procedural-fallback proportions). Split out of `config.js` purely to keep that file under BUILD-PLAN.md's 400-line cap — same pattern BUILD-PLAN.md itself names ("player.js into player.js + player-anim.js"). Still just numbers, no logic. |
 | `src/noise.js` | Seeded PRNG (`makeRng`, mulberry32) + 2D simplex noise (`SimplexNoise2D`) + `fbm2D` + `smoothstep`. No dependencies on anything else in `src/`. |
-| `src/terrain.js` | `heightAt(x,z)` — the analytic terrain function (fbm + domain warp + ridged noise + mesas + town plateau + boundary ridge, all smoothstep-blended). `normalAt(x,z)` via finite differences. `buildTerrain(scene)` builds the vertex-colored mesh. `groundHeightAt(x,z)` — **now just calls `heightAt`, not a raycast.** See the big comment at its definition for why; this is the one deliberate deviation from a literal reading of the locked "raycast onto the mesh" line, done for a measured, serious performance reason. |
-| `src/sky.js` | Gradient sky dome (custom `ShaderMaterial`, zenith/horizon/sun-disc), sun `DirectionalLight` + `HemisphereLight`, `FogExp2`. `updateShadowFollow` keeps the shadow camera centered on the player every frame. |
-| `src/collision.js` | The one collider array (`colliders`), `addCircleCollider`/`addBoxCollider`/`removeCollider`, and `resolveCollisions(pos, radius)` — pushes a circular agent out of anything it overlaps. Every later round's characters and buildings register into this same array. |
+| `src/terrain.js` | `heightAt(x,z)` — the analytic terrain function (fbm + domain warp + ridged noise + mesas + town plateau + boundary ridge, all smoothstep-blended). `normalAt(x,z)` via finite differences. `buildTerrain(scene)` builds the vertex-colored mesh. `groundHeightAt(x,z)` — **now just calls `heightAt`, not a raycast.** See the big comment at its definition for why; this is the one deliberate deviation from a literal reading of the locked "raycast onto the mesh" line, done for a measured, serious performance reason. The horse uses this exact function too, same as the player. |
+| `src/sky.js` | Gradient sky dome (custom `ShaderMaterial`, zenith/horizon/sun-disc), sun `DirectionalLight` + `HemisphereLight`, `FogExp2`. `updateShadowFollow` keeps the shadow camera centered on the player every frame — **not** the horse when mounted, since the player's own position tracks the saddle every frame anyway (see `player.js`), so this needed no change. |
+| `src/collision.js` | The one collider array (`colliders`), `addCircleCollider`/`addBoxCollider`/`removeCollider`, and `resolveCollisions(pos, radius, ignore)` — pushes a circular agent out of anything it overlaps, skipping `ignore` if given. The horse is the first *moving* collider: `addCircleCollider` is called once in `horse.js`'s constructor and the returned object's `.x`/`.z` are mutated in place every frame — never re-added/removed. Every later round's characters and buildings register into this same array. |
 | `src/props.js` | Rocks (lumpy `IcosahedronGeometry`), cacti and dead trees (merged `CylinderGeometry` parts via `BufferGeometryUtils.mergeGeometries`), each as a few `InstancedMesh` variants. Registers a circle collider per placement. `buildProps(scene)` returns `{rocks, cacti, trees}` counts. |
-| `src/grass.js` | Grass tufts (crossed triangle blades, vertex-colored root→tip) as one fixed-size `InstancedMesh` pool that **follows the player**, re-bucketed onto a world-space jittered grid (deterministic per cell via hashing, so it doesn't visibly reshuffle) whenever the player moves `GRASS.recenterDistance`. |
+| `src/grass.js` | Grass tufts (crossed triangle blades, vertex-colored root→tip) as one fixed-size `InstancedMesh` pool that **follows the player**, re-bucketed onto a world-space jittered grid (deterministic per cell via hashing, so it doesn't visibly reshuffle) whenever the player moves `GRASS.recenterDistance`. Does not follow the horse — round 5/7 territory if that's ever wanted, not needed for round 2. |
 | `src/world.js` | Orchestrator only — calls terrain/sky/props/grass builders, wires `update(playerPos)` (shadow follow + grass recenter) and exposes `groundHeightAt`. ~35 lines on purpose. |
-| `src/assets.js` | `loadGLTF(path)`, `findClip(gltf, ...candidates)` (the exact-then-substring contract), `measureHeight(object3D)`, `enableShadows(root)`. Generic, reused by every character loader (bandit/horse in later rounds should go through this too). |
+| `src/assets.js` | `loadGLTF(path)`, `findClip(gltf, ...candidates)` (the exact-then-substring contract), `measureHeight(object3D)`, `enableShadows(root)`. Generic, reused by every character loader — **except the horse does NOT use `measureHeight()` to scale itself**, see `config-horse.js`'s `HORSE.modelScale` comment and "Known rough edges" for why (it lies for this specific skinned rig). `loadGLTF`/`findClip`/`enableShadows` are still reused as-is by `horse-character.js`. |
 | `src/placeholder-human.js` | `PlaceholderHuman` — the "GLB failed to load" fallback. Hand-built `Group` hierarchy (hips→torso/head, shoulder→elbow arms, hip→knee legs) of `CapsuleGeometry` meshes, animated **procedurally** (sinusoidal swing driven directly by current speed, no `AnimationMixer`, no baked clips). Implements the same interface as the real rig, including `setAirborne(bool)` for its own simple procedural jump-crouch overlay — unaffected by the real rig's jump-clip removal below, this was always a separate, simpler mechanism. |
+| `src/placeholder-horse.js` | `PlaceholderHorse` — the horse's equivalent fallback: a procedural quadruped (body/neck/head/tail capsules, four two-segment legs in a diagonal trot gait), same procedural-not-mixer approach as `PlaceholderHuman`. Implements `{root, height, setLocomotion(state,speed), update(dt)}` — no `setAirborne` (the horse never jumps this round). Verified end-to-end by temporarily renaming `horse.glb` away and running `node scripts/smoke.mjs`: game stayed fully playable, mount/dismount/camera/stamina all still passed against the placeholder rig, GLB absence surfaced as one console warning, not a crash. |
 | `src/character.js` | `createPlayerCharacter()` — loads `player.glb`, rescales to `PLAYER.modelHeight`, wraps its `idle`/`walk`/`run` clips behind `{root, height, setLocomotion(state,speed), setAirborne(bool), update(dt)}`. **No jump clip** — `setAirborne` is a no-op; player.js's `ANIM.airTimeScale` already slows the current locomotion clip while airborne, which is all that ships now (see "Known rough edges" for what was tried and removed). Falls back to `PlaceholderHuman` on any load failure *or* if neither an idle nor a walk clip is found. |
-| `src/input.js` | Keyboard `Set`, pointer lock (`initInput(canvas)`), raw `movementX/Y` accumulation (`consumeMouseDelta`), `onPointerLockChanged(fn)` listener. |
-| `src/camera.js` | `ThirdPersonCamera` — mouse orbit (yaw/pitch), collision-aware distance (heightfield march + collider-circle sweep, **not** a mesh raycast — same perf reason as terrain), sway while moving. `getForward()`/`getRight()` are the shared convention player.js uses for WASD. |
-| `src/player.js` | `Player` class — accel/decel movement, jump with coyote time + jump buffer, gravity, ground snap via `groundHeightAt`, prop collision + boundary clamp, mesh-facing turn, and the idle/walk/run hysteresis state machine (`classifySpeed`) feeding `character.setLocomotion`. |
-| `src/ui.js` | `initUI()` — toggles the loading screen, click-to-play overlay, and boundary-warning opacity. All markup lives in `index.html`. |
-| `src/main.js` | Entry point. Renderer/scene/camera setup (ACES tone mapping, exposure 1.1, sRGB output, `PCFSoftShadowMap`), async load sequence, the `renderer.setAnimationLoop` loop. Sets `window.__frames`/`__ready`/`__debug` for `smoke.mjs`. |
+| `src/horse-character.js` | `createHorseCharacter()` — the horse's equivalent of `character.js`: loads `horse.glb`, rescales by the **hardcoded** `HORSE.modelScale` (not `measureHeight()` — see above), wires `idle`/`walk`/`gallop` clips (no `Trot` clip exists on this rig) behind the same `{root, height, setLocomotion, update}` shape. Falls back to `PlaceholderHorse`. `horse.js` owns all position/rotation/AI; this file only knows how to play a requested locomotion state, exactly mirroring the player/character.js split. |
+| `src/input.js` | Keyboard `Set`, pointer lock (`initInput(canvas)`), raw `movementX/Y` accumulation (`consumeMouseDelta`), `onPointerLockChanged(fn)` listener. Unchanged this round — `horse.js` reads `isKeyDown`/`isPointerLocked` directly for H/E/WASD/Shift, same pattern `player.js` already used, no new input plumbing needed. |
+| `src/camera.js` | `ThirdPersonCamera` — mouse orbit (yaw/pitch), collision-aware distance (heightfield march + collider-circle sweep, **not** a mesh raycast — same perf reason as terrain), sway while moving. `getForward()`/`getRight()` are the shared convention player.js *and now horse.js* use for WASD. **New this round:** `setMounted(bool)` swaps `CAMERA.distance`/`pivotHeight`/`swayRun` for `CAMERA.mountedDistance`/`mountedPivotHeight`/`mountedSwayRun`; `snap()`/`update()` take an optional `ignoreCollider` argument (main.js passes the horse's own collider while mounted) — without it, the rider's camera pivot sits on/inside the horse's own collider and every direction the occlusion sweep checks immediately "hits" it, collapsing the camera to `CAMERA.minDistance`. Found and fixed via screenshot (see "Known rough edges"), not just reasoned about. |
+| `src/player.js` | `Player` class — accel/decel movement, jump with coyote time + jump buffer, gravity, ground snap via `groundHeightAt`, prop collision + boundary clamp, mesh-facing turn, and the idle/walk/run hysteresis state machine (`classifySpeed`) feeding `character.setLocomotion`. **New this round:** `this.mounted` flag, `mount()`/`dismount(x,y,z,yaw)` methods (called by `horse.js`, never called by `player.js` itself), and an early-return branch in `update()` — while mounted, all on-foot physics/collision/boundary logic is skipped; `main.js` writes `this.position`/`this.meshYaw` from `horse.getSaddleTransform()` every frame *before* calling `player.update()`, and the mounted branch just plays a resting `idle` pose and syncs the visual rig's transform. No riding animation clip exists on this rig — the player mesh just stands in `idle` pose at the saddle point; a known, deliberate shortcut (see "Known rough edges"). |
+| `src/horse.js` | **New this round.** `Horse` class — the horse's counterpart to `player.js`: owns its `THREE.Vector3 position`, a persistent circle collider (`this.collider`, mutated in place every frame, added once), and branches every frame on `this.mounted` between two movement modes: an unmounted wander/follow/whistle AI (`_updateUnmounted`) and mounted WASD-relative-to-camera steering (`_updateMounted`, gallop gated by stamina). Reads `H` (whistle) and `E` (mount/dismount, via the **public** `handleMountToggle(player)` — deliberately not underscore-prefixed, see its own doc comment, because `scripts/smoke.mjs` calls it directly to exercise mounting without simulating real pointer-locked input) itself from `input.js`, same as `player.js` already does for its own keys. `getSaddleTransform(outPos)` returns the rider's world `{position, yaw}` for this frame, easing from wherever the player stood at mount time onto the true saddle point over `HORSE.mountLerpTime` (BUILD-PLAN.md's no-clip mount fake) — `main.js` calls this every frame the player is mounted, before `player.update()`. Also drives lean-into-turns (`this.lean`, applied as `character.root.rotation.z`) and `this.stamina`/`this.staminaExhausted` (drains only while galloping, gates whether a gallop request is honored). No vectors allocated inside `update()`. |
+| `src/ui.js` | `initUI()` — toggles the loading screen, click-to-play overlay, boundary-warning opacity, and (new this round) the stamina bar's visibility (`setMounted(bool)`) and fill/exhausted-color (`updateStamina(stamina, exhausted)`). All markup lives in `index.html`. |
+| `src/main.js` | Entry point. Renderer/scene/camera setup (ACES tone mapping, exposure 1.1, sRGB output, `PCFSoftShadowMap`), async load sequence, the `renderer.setAnimationLoop` loop. Sets `window.__frames`/`__ready`/`__debug` for `smoke.mjs`. **New this round:** loads the horse character and constructs `Horse`; the per-frame order is `horse.update()` first (reads/writes `player.mounted` via mount/dismount), then `if (player.mounted)` sync `player.position`/`meshYaw` from `horse.getSaddleTransform()`, then `player.update()` — in that order, not the reverse, so a same-frame dismount's drop-off position isn't clobbered by a stale saddle-sync (see "Known rough edges" if this ordering is ever "simplified"). `tpCamera.setMounted()`/`ui.setMounted()` are called unconditionally every frame off `player.mounted` (idempotent, no edge-detection needed). |
 
 ---
 
@@ -106,7 +110,7 @@ per the CC0-only rule.
   "Farmer" since it doesn't matter: `character.js` rescales dynamically off
   `measureHeight()`'s live reading (now trustworthy — see the matrixWorld fix
   under "known rough edges"), never off a hardcoded number.
-- `horse.glb` — height **4.824**, depth **5.676** in its *rest pose*. That is not horse-sized — real horses are ~1.6m at the withers. **Round 2 should not trust `measureHeight()` on the horse without checking this first.** Likely cause: the rest/bind pose (frame the skin sits in with no animation applied) is posed unusually — maybe mid-gallop or reared — rather than a neutral T/A-pose. Round 2 needs to either measure height with a neutral clip's first frame applied, or hardcode a sanity-checked scale factor in config and say so. Flagged here, not solved — round 1 never loads horse.glb.
+- `horse.glb` — height **4.824**, depth **5.676** in its *rest pose* (round-1 measurement, via `Box3.setFromObject`). **Resolved in round 2 — root cause was NOT a posed/reared bind pose, and this measurement is structurally unreliable for this rig regardless of pose.** Two things were verified directly, not assumed: (1) `Box3.setFromObject` on a `SkinnedMesh` only ever reads the geometry's *bind-pose* position attribute — it never applies bone/skin matrices, so playing `Idle`'s first frame through an `AnimationMixer` and calling `mixer.update(0)` before measuring changed **nothing** about the box (confirmed byte-identical rest-pose vs. idle-pose bbox). Chasing "measure with a neutral clip applied" would not have helped even if the bind pose *were* the problem. (2) The bind pose itself is a normal standing pose, not reared/mid-gallop — confirmed by reading real bone *world* positions (`bone.getWorldPosition()` after `updateMatrixWorld(true)`, which does reflect the true rest pose since that's just node transforms, no skinning involved): front/back hoof bones sit ~0.40 above the mesh's actual ground contact, legs are vertical columns, body roughly horizontal. The oversized box is simply because the asset itself is authored large (an `AnimalArmature`/`Horse` node scale of literally 100 baked into the source file) — a real, if unusual, property of the asset, not a measurement artifact of pose. **Fix:** hardcoded `HORSE.modelScale = 0.58` in `config-horse.js` (not derived at runtime), computed from the withers bone (`Torso2`, world Y ≈2.746 above the mesh's true ground line ≈-0.011) against a real-world target of ~1.6m at the withers. Visually confirmed via a real screenshot standing next to the player — reads as correctly horse-sized, not oversized or toy-sized. **If a future round swaps this model**, redo this exact bone-world-position measurement; do not trust `measureHeight()`/`Box3.setFromObject` on any `SkinnedMesh` without first confirming animation actually moves its measured box, the same way this one didn't.
 
 Clip names, the `HitRecieve` misspelling, the `Run`/`Idle` substring-collision trap, and the horse's duplicated bare/`AnimalArmature|`-prefixed clips are all unchanged from round 0 — see BUILD-PLAN.md-era notes preserved below.
 
@@ -158,8 +162,9 @@ matches. Round 1's `character.js` logs one `console.warn` per missing clip.
 ## Animation gap — what's missing and what to fake
 
 Unchanged from round 0's finding. Of the clips rounds 1–7 need, only `Reload` is
-missing across both humanoids; nothing is missing for round 1 specifically
-(`Idle`, `Walk`, `Run` all exist as real clips and are wired up).
+missing across both humanoids; nothing was missing for round 1 or round 2
+specifically (`Idle`/`Walk`/`Run` and `Idle`/`Walk`/`Gallop` all exist as real
+clips and are wired up).
 
 | Needed | player / bandit | horse |
 |---|---|---|
@@ -172,16 +177,23 @@ missing across both humanoids; nothing is missing for round 1 specifically
 | `Hit` | ✅ `HitRecieve`, `HitRecieve_2` | ✅ `Idle_HitReact_Left/Right` |
 | `Death` | ✅ `Death` | ✅ `Death` |
 | `Idle_Gun` / `Run_Gun` | ✅ `Idle_Gun`, `Idle_Gun_Pointing`, `Run_Shoot` | — |
-| `Mount` / `Dismount` | ❌ missing (expected — fake per plan) | ❌ missing |
+| `Mount` / `Dismount` | ❌ missing (expected — faked, see below) | ❌ missing |
 
-**Substitutions — unchanged from round 0's plan, none of them implemented yet
-(round 1 didn't need any):**
+**Substitutions:**
 
 - **`Reload` → fake.** Bone rotation on `Wrist.R`/`LowerArm.R` — at runtime that's
   `getObjectByName('WristR')`/`('LowerArmR')`, dots stripped; see the gotcha in
-  "Skeleton — bone names". *(Round 3 owns this.)*
-- **`Mount`/`Dismount` → no clip.** Lerp position/rotation onto the saddle point over 0.4s. *(Round 2.)*
-- **Mounted shooting → partial-skeleton blend** of `Idle_Gun_Shoot` over the riding pose. *(Round 3.)*
+  "Skeleton — bone names". *(Round 3 owns this, not yet implemented.)*
+- **`Mount`/`Dismount` → no clip. ✅ Implemented round 2.** Lerps the player's
+  rendered position/rotation onto the saddle point over `HORSE.mountLerpTime`
+  (0.4s) via `Horse.getSaddleTransform()`; dismount is instant, no lerp. See
+  `horse.js` and CLAUDE.md's "Decisions made" for the mechanism.
+- **Mounted shooting → partial-skeleton blend** of `Idle_Gun_Shoot` over the
+  riding pose. *(Round 3 owns this, not yet implemented — round 2 only built
+  the riding itself, not shooting while riding. See "What the next round (3)
+  should watch out for": this project's one prior partial-skeleton-blend
+  attempt, the removed jump clip, never read as right after several tuning
+  passes — budget accordingly.)*
 - **Duel draw** *(round 6)* — `Idle_Gun_Pointing`.
 
 Nothing needs procedural recoil faking: `Gun_Shoot` is a real clip.
@@ -297,13 +309,18 @@ and moves `FootL` by **exactly 0.0**. Rotating `Hips` moves `UpperLegL` by
   `Hips` too.** Measure before assuming it's fine.
 
 Horse rig: `RootNode` → `AnimalArmature`, with `Head`. 68 nodes. No hand/wrist
-bones. Saddle point will be a hand-tuned offset in `config.js` (round 2).
+bones. Saddle point is a hand-tuned offset, `HORSE.saddleOffset` in
+`config-horse.js` (round 2) — see "Models — inventory" above for the
+measurement behind `HORSE.modelScale`, and "Decisions made" below for the
+saddle offset itself.
 
 Materials are flat named colours, no textures.
 
 ---
 
-## Decisions made this round, and why
+## Decisions made, and why
+
+Grows every round; round 1's decisions below are unchanged and still hold.
 
 - **`groundHeightAt` is analytic, not a mesh raycast, despite the locked
   decision's wording.** Measured directly: two `Raycaster.intersectObject` calls
@@ -412,12 +429,90 @@ Materials are flat named colours, no textures.
     Mixamo trip happens anyway, do it once, for the whole set, before round
     3 — not now, for a jump.**
 
+### Round 2 decisions
+
+- **`horse.glb`'s oversized bind-pose box (flagged round 1) was a real asset
+  property, not a posed/reared bind pose, and `measureHeight()` cannot be
+  fixed by applying an animation frame first — see "Models — inventory"
+  above for the full investigation. `HORSE.modelScale` is a hardcoded
+  constant, not runtime-derived.**
+- **Mount/dismount ordering in `main.js`: `horse.update()` runs before the
+  saddle-transform sync, and `player.mounted` (not a locally-cached "was
+  mounted last frame" flag) decides whether to apply it.** Tried the
+  seemingly-more-natural order first (branch on `horse.mounted` *before*
+  calling `horse.update()`) and hit a real same-frame bug: pressing E to
+  dismount flips `horse.mounted`/`player.mounted` to false *inside* that
+  same `horse.update()` call (it also computes and applies the drop-off
+  position via `player.dismount()`), but the outer branch had already
+  committed to the "still mounted" code path for that frame and went on to
+  overwrite the just-computed drop-off position with a stale saddle-sync,
+  which `player.update()` then ran full on-foot physics from. Fixed by
+  reading `player.mounted` fresh, after `horse.update()` returns, before
+  deciding whether to sync — see `main.js`'s comment. **If this ordering
+  ever gets "cleaned up," re-verify a dismount doesn't teleport the player
+  back onto the horse for one frame.**
+- **The horse's own persistent collider must be excluded from the mounted
+  camera's occlusion sweep.** Found by screenshot, not reasoning — the
+  mounted camera was collapsed into the player's face
+  (`currentDistance` == `CAMERA.minDistance`). Root cause: the horse
+  registers one circle collider that stays live for its whole lifetime
+  (needed so a riderless horse blocks the player on foot, and so the horse
+  itself avoids rocks/trees) — while mounted, the rider's camera pivot sits
+  right on/inside that same collider (the saddle offset is tiny), so every
+  direction `_maxUnobstructedDistance` swept immediately hit "its own"
+  horse via `segmentCircleHit`'s pivot-already-inside case. Fixed by
+  threading an `ignoreCollider` argument through
+  `ThirdPersonCamera._maxUnobstructedDistance`/`snap`/`update`; `main.js`
+  passes `horse.collider` while `player.mounted`, `null` otherwise. **Any
+  future round that gives another mountable/rideable entity its own
+  persistent collider will hit this exact bug** if its camera code doesn't
+  also exclude that collider.
+- **No riding animation clip — the player mesh just stands in its `idle`
+  pose at the saddle point while mounted.** `player.glb`'s 24-clip set (see
+  the clip inventory above) has nothing resembling a seated/riding pose,
+  and BUILD-PLAN.md's fake table only covers the mount/dismount
+  *transition* ("lerp onto the saddle point over 0.4s, no clip"), not
+  ongoing ridden posture. Confirmed via screenshot that this reads
+  acceptably — the character visibly sits at the right height/position on
+  the horse's back, just without leg-wrap or seated leg bend. Flagged, not
+  fixed; a real riding pose would need either a sourced clip (same
+  CC0/licensing constraints as the removed jump clip) or a procedural
+  partial-skeleton pose (bend `UpperLegL/R` + the `Foot.L/R`-must-move-with-
+  it trap documented under "Skeleton — bone names" above — this would hit
+  that exact trap again).
+- **Horse movement steering (mounted and unmounted) duplicates small helper
+  functions from `player.js` (`lerpAngle`, an accel/decel integrator, a
+  speed-hysteresis classifier) rather than importing shared versions.**
+  Deliberate, not an oversight — each is under 10 lines, the horse's
+  version has horse-specific thresholds/behavior baked in, and this
+  project's own stated preference is "three similar lines is better than a
+  premature abstraction." Revisit only if a third mobile character (round
+  4's bandits) needs the exact same shapes and the duplication starts
+  actually hurting.
+- **`Horse.handleMountToggle(player)` is public (no underscore), unlike most
+  of `horse.js`'s other internals.** It's the one method smoke.mjs calls
+  directly to exercise mounting/dismounting without simulating real
+  pointer-locked keyboard+mouse input (which headless Playwright cannot
+  trigger the way a trusted user gesture can) — same spirit as round 1's
+  precedent of poking `window.__debug.tpCamera.yaw`/`.pitch` directly for
+  screenshot framing. If round 3+ needs another debug-callable entry point,
+  follow this same pattern rather than reaching into underscore-prefixed
+  internals from a test.
+- **Camera sway while mounted reuses `CAMERA.swayWalk` for the low end but
+  gets its own `CAMERA.mountedSwayRun` for the high end**, normalized
+  against `HORSE.gallopSpeed` instead of `PLAYER.sprintSpeed`. Using the
+  player's sprint speed as the normalization reference while mounted would
+  have under-scaled sway at any horse speed above a human sprint (which is
+  most of them), making the ride feel flat regardless of gait.
+
 ---
 
 ## Constants other systems depend on
 
-Everything tunable now lives in `src/config.js` — see the file map above for the
-group names. Highlights a later round will specifically reach for:
+Everything tunable lives in `src/config.js`, **except the horse's own tunables,
+which live in `src/config-horse.js`** (split out this round purely to stay
+under the 400-line cap — see the file map). Highlights a later round will
+specifically reach for:
 
 - `SPAWN` (`x`, `z`, `yaw`) — the plateau spawn/respawn point.
 - `TOWN` (`centerX/Z`, `halfSize`, `blend`, `height`) — round 5's building
@@ -425,36 +520,63 @@ group names. Highlights a later round will specifically reach for:
   extra margin around it for scenery.
 - `BOUNDARY` — `playerLimit` is the hard clamp radius; don't let any placed
   content (bandit camps, round 4; the town, round 5 — already centered at
-  origin so this is moot for it) end up outside it.
+  origin so this is moot for it) end up outside it. The horse is clamped to
+  this exact same radius too (`horse.js`'s `update()`), same formula as the
+  player's.
 - `MESAS` — array of `{x, z, radius, top, flat}`. Landmarks other systems might
   want to reference (e.g. a bounty-camp callout "near the twin mesa").
 - `colliders` (from `src/collision.js`) — the shared array. `addCircleCollider`/
-  `addBoxCollider` register into it; `resolveCollisions(pos, radius)` is what
-  every future character (bandits, horse) and the player already use to not
-  clip through rocks/trees/cacti. Buildings (round 5) will use box colliders
-  here for the first time — `resolveBox` is written and unit-testable but has
-  no real caller yet.
-- `findClip`/`loadGLTF`/`measureHeight`/`enableShadows` (from `src/assets.js`) —
-  reuse for the bandit (round 4) and horse (round 2) loaders instead of
-  reimplementing.
+  `addBoxCollider` register into it; `resolveCollisions(pos, radius, ignore)` is
+  what every future character (bandits round 4) and the player/horse already
+  use to not clip through rocks/trees/cacti — pass your own collider as
+  `ignore` if you've registered one, or you'll push yourself out of yourself.
+  Buildings (round 5) will use box colliders here for the first time —
+  `resolveBox` is written and unit-testable but has no real caller yet. The
+  horse is the first **moving** collider — `addCircleCollider` once, then
+  mutate the returned object's `.x`/`.z` every frame; round 4's bandits
+  should follow this same pattern, not re-add/remove per frame.
+- `findClip`/`loadGLTF`/`enableShadows` (from `src/assets.js`) — reuse for the
+  bandit loader (round 4) too. **`measureHeight` is reuse-with-caution**: it
+  silently returns a meaningless number for any `SkinnedMesh` where playing an
+  animation frame doesn't move the CPU-side bounding box (true of every
+  `SkinnedMesh` — skinning is GPU-side — see the horse's `HORSE.modelScale`
+  writeup under "Models — inventory"). It happens to be trustworthy for
+  `player.glb` because that rig's bind pose already reads as correctly-scaled;
+  don't assume the next model will be so lucky, and check before trusting it.
 - `ThirdPersonCamera.getForward()`/`getRight()` — the shared movement-direction
-  convention. Any future controllable entity (mounted player, round 2) should
-  derive its movement basis from these, not reinvent yaw math.
+  convention, now used by both `player.js` and `horse.js`'s mounted steering.
+  Any future controllable entity should derive its movement basis from these,
+  not reinvent yaw math. `ThirdPersonCamera.setMounted(bool)` and the
+  `ignoreCollider` argument on `snap()`/`update()` are round 2 additions — any
+  future entity that both (a) can be the camera's pivot and (b) has its own
+  persistent collider needs to pass that collider as `ignoreCollider` the same
+  way `main.js` does for the horse, or the camera collapses to `minDistance`
+  while attached to it (see "Decisions made").
+- `Player.mounted`/`mount()`/`dismount(x,y,z,yaw)` — round 4's bandit AI or
+  round 6's duels should check `player.mounted` before assuming the player is
+  standing on the ground with normal on-foot physics active.
 - three.js **0.160.0** confirmed to **not** have `THREE.MathUtils.damp` (added
   later upstream) — `camera.js` hand-rolls exponential smoothing instead. Don't
   add a `MathUtils.damp` call anywhere without checking this again.
 - Smoke server port **8917**; `window.__frames`/`__ready` still both kept alive
-  every frame. `window.__debug`'s shape has grown across this round's fixes —
-  current fields: `modelsLoaded:{player}`, `playerY`, `grounded`, `propCounts`,
-  `scene`/`tpCamera`/`player` (live object refs, see below), `characterScale`,
-  `characterWorldBBoxHeight`, `playerPos`, `cameraPos`,
-  `cameraDistanceToPlayer`, `cameraCurrentDistance`, `cameraFov`,
-  `characterRotationY`. (`jumpClipLoaded`/`jumping` existed for one round
-  while there was a retargeted jump clip to report on — removed along with
-  the feature, see "Known rough edges".) Extend it, don't replace it, when a
-  later round adds its own machine-checkable state — and if you add a field
-  here, update this list, it's already fallen out of sync with `main.js`
-  once this round.
+  every frame. `window.__debug`'s current shape: `modelsLoaded:{player,horse}`,
+  `playerY`, `grounded`, `propCounts`, `scene`/`tpCamera`/`player`/`horse` (live
+  object refs — see below and the round-1 "screenshots ARE possible" note for
+  how to poke them), `characterScale`, `characterWorldBBoxHeight`, `playerPos`,
+  `cameraPos`, `cameraDistanceToPlayer`, `cameraCurrentDistance`, `cameraFov`,
+  `characterRotationY`, `horsePos`, `horseStamina`, `mounted`. (`jumpClipLoaded`/
+  `jumping` existed for one round while there was a retargeted jump clip to
+  report on — removed along with the feature, see "Known rough edges".)
+  `window.__debug.horse` is the live `Horse` instance — its public
+  `handleMountToggle(player)` is the sanctioned way for a smoke check to
+  mount/dismount without simulating real pointer-locked input; see the
+  "mount attaches..." check in `scripts/smoke.mjs` for the pattern (teleport
+  `player.position` within `HORSE.mountRange`, call `handleMountToggle`, then
+  poll — with a **synchronous** predicate, see `smoke.mjs`'s file-map entry
+  for the async-`waitForFunction` gotcha — until `horse._mountBlendT` reaches
+  `HORSE.mountLerpTime`). Extend `__debug`, don't replace it, when a later
+  round adds its own machine-checkable state — and if you add a field here,
+  update this list.
 
 ---
 
@@ -807,46 +929,117 @@ group names. Highlights a later round will specifically reach for:
   could look slightly swimmy for one or two frames right after a big
   obstruction-triggered zoom-in. Minor; revisit only if it's noticeable in
   person.
+- **Fixed round 2: mounted camera collapsed to `CAMERA.minDistance` (inside
+  the player's head).** See "Decisions made" → "The horse's own persistent
+  collider must be excluded..." for the full root cause and fix
+  (`ignoreCollider` threaded through `ThirdPersonCamera`). Confirmed via a
+  before/after screenshot, not just reasoning — the before-shot showed the
+  camera pushed into the back of the player's hat.
+- **`page.waitForFunction()` with an async predicate resolves on its first
+  poll regardless of the real result, in this Playwright version.** See
+  `scripts/smoke.mjs`'s file-map entry above for the full gotcha and the
+  fix (fetch anything needing `import()` in a separate plain `await
+  page.evaluate()` first, keep the polled predicate itself synchronous).
+  This bit the "mount attaches..." check directly — first version reported
+  a false pass with the saddle-lerp only ~25% complete.
+- **Horse AI feel (wander radius/timing, follow-trigger distance, whistle
+  responsiveness) is tuned by inspection of the numbers and one wander-mode
+  code read-through, not by watching it play.** Same caveat as round 1's
+  camera-orbit-direction math: cheap to get subtly wrong (too twitchy, too
+  sluggish, orbits too tight/wide), no way for this session to watch it
+  animate over multiple seconds and judge the feel. `HORSE.wanderRadius`/
+  `wanderIntervalMin/Max`/`followTriggerDistance`/`followSettleDistance` in
+  `config-horse.js` are the levers if it feels off.
+- **Horse lean-into-turns sign/magnitude (`HORSE.leanFactor`,
+  `HORSE.leanMax`) was not visually confirmed** — screenshots this round
+  captured scale, facing, and the mounted saddle position (all real
+  concerns from round-1-style bugs), but not a turning horse, since that
+  needs a multi-frame video-like sequence rather than one static frame to
+  judge. If the horse appears to lean the wrong way (away from the turn
+  instead of into it) or not at all, check the sign on `-yawRate *
+  HORSE.leanFactor` in `horse.js`'s `_turnToward()` first.
+- **Gallop/stamina drain-and-refill was smoke-tested for correctness
+  (stays within `[0, staminaMax]`, `staminaExhausted` gates a further
+  gallop request) but not for *feel*** — how long a gallop lasts before
+  exhaustion, how long recovery takes, whether the exhausted-color stamina
+  bar is a clear enough signal. `HORSE.staminaDrainRate`/`staminaRegenRate`/
+  `staminaExhaustedFloor`/`staminaExhaustedRecover` in `config-horse.js` are
+  the levers.
+- **No riding animation clip** — see "Decisions made" → "No riding
+  animation clip" above. Confirmed acceptable via screenshot, not
+  hidden/unaddressed.
 
 ---
 
-## What the next round (2 — the horse) should watch out for
+## What the next round (3 — guns) should watch out for
 
-1. **`horse.glb`'s rest-pose bounding box is 4.8m tall, 5.7m long — not
-   horse-sized.** See "Models — inventory" above. That number came from
-   `gltf-transform`'s static analysis and is unrelated to the
-   `measureHeight()` matrixWorld bug fixed this round (see "known rough
-   edges") — `measureHeight()` is now trustworthy (verified: gives 1.83–1.85
-   for `player.glb`, matching reality), so if the horse still measures ~4.8m
-   through it, that's a genuine property of the asset's rest pose, not a
-   measurement bug. Investigate why (posed rest frame?) before picking a
-   scale factor, or sanity-check against a known real-world horse height
-   (~1.6m at the withers) and hardcode+comment the scale in `config.js` if
-   the bounding box keeps lying.
-2. **Reuse `src/assets.js`** (`loadGLTF`, `findClip`, `measureHeight`,
-   `enableShadows`) and follow `character.js`'s shape (`{root, height,
-   setLocomotion, update}` interface, placeholder fallback) for the horse
-   loader instead of writing a parallel one-off.
-3. **Saddle point is a hand-tuned offset from the horse root**, per BUILD-PLAN.md
-   — the horse rig has no hand/seat bone. Expose it in `config.js` as a new
-   `HORSE` block (position/rotation offset), not a magic number in `horse.js`.
-4. **Mount/dismount has no clip** — lerp position+rotation onto the saddle point
-   over 0.4s, per the substitutions table above. No mixer involved for that part.
-5. **Camera pulls back and raises when mounted** — `ThirdPersonCamera` currently
-   has one fixed `CAMERA.distance`/`pivotHeight`. Don't hardcode a second set of
-   numbers in `camera.js`; add `CAMERA.mountedDistance`/`mountedPivotHeight` (or
-   similar) to config and a mode flag, so round 1's on-foot camera feel is
-   untouched when unmounted.
-6. **Horse movement should go through `colliders`/`resolveCollisions`** like the
-   player already does — don't let the horse clip through rocks.
-7. **Extend `scripts/smoke.mjs`'s `CHECKS`** — at minimum that `horse.glb` loads
-   (or falls back cleanly), and something machine-checkable about mount state
-   (e.g. player position matches saddle-point offset from horse position after a
-   simulated mount, if round 2 exposes a way to trigger mount without real input).
-8. Whistle (`H`) and mount/dismount (`E`) are new key bindings — add them to
-   `SMOKE-TEST.md`'s control list, and to `input.js`'s handling if it needs
-   anything beyond `isKeyDown` (it currently only exposes held-state + one
-   pointer-lock click handler).
+1. **Mounted shooting needs `horse.js`'s `_updateMounted` to stop reading
+   full WASD while the player is aiming.** Right now it reads D/A and W/S
+   both, camera-relative, exactly like on-foot movement. BUILD-PLAN.md's
+   round 3 text is explicit: "the horse keeps steering with **A/D**" while
+   aiming/firing — W/S (and probably gallop) should likely be disabled or
+   reduced during that state. This needs round 3's aim/fire state (owned by
+   whatever new `combat.js`/`weapons.js` becomes) to reach into or signal
+   `horse.js`, which currently has zero awareness of combat. Design that
+   coupling deliberately (a passed-in `aiming` flag? a shared mounted-combat
+   state object?) rather than reaching into private fields from a new file.
+2. **Reload is disabled at a gallop, per BUILD-PLAN.md** — `horse.staminaExhausted`
+   is not the same signal as "currently galloping"; check `horse.animState
+   === 'gallop'` (or add a clearer `horse.isGalloping` flag — `this.speed`
+   crossing `HORSE_ANIM.gallopThreshold` is the closest existing proxy) for
+   this gate, not stamina.
+3. **The revolver attaches to `Wrist.R` (source name) / `WristR` (runtime
+   name, dots stripped by GLTFLoader — see "Skeleton — bone names" above,
+   this bit round 1 hard and is worth re-reading before writing the
+   attachment code).** `player.glb`'s hand bone was never touched this round
+   — bandit.glb (round 4) shares the identical rig, so this attachment code
+   should be written once, generically, against any loaded skeleton, not
+   hardcoded to the player.
+4. **Player's `Gun_Shoot`/`Idle_Gun`/`Idle_Gun_Pointing`/`Run_Shoot` clips are
+   real** (see the clip inventory) — no procedural recoil fake needed
+   on-foot. `Reload` is genuinely missing (confirmed round 0, unchanged) —
+   fake per BUILD-PLAN.md's table (bone rotation on `WristR`/`LowerArmR`).
+5. **Mounted shooting with no mounted-shoot clip (there isn't one — horse.glb
+   has no rider-aware animation and player.glb has no seated pose) needs the
+   additive/partial-skeleton blend BUILD-PLAN.md calls for** ("spine-up from
+   one clip, hips-down from the other"). This project has exactly one prior
+   attempt at cross-clip/partial-skeleton blending — the removed retargeted
+   jump clip (see "Known rough edges") — which was pulled after several
+   rounds of tuning never read as right. Budget real time for this, and
+   consider whether a simpler fake (just play `Idle_Gun_Shoot` on the whole
+   body while mounted, accept it looks a little stiff) is good enough before
+   attempting a true partial-skeleton mix.
+6. **`player.mounted` is already exposed** (`player.js`) for gating mounted-
+   specific accuracy penalty/reload-lockout — a new `HORSE.mountedAccuracyPenalty`
+   -style constant belongs in `config-horse.js`, not `config.js`, matching
+   this round's split.
+7. **Audio fetching may hit the same egress-proxy 403s model fetching did in
+   round 0/1** (`poly.pizza`/`quaternius.com`/`mixamo.com` were all blocked;
+   `freesound.org`/`kenney.nl` weren't tried this round, untested). Try
+   fetching `gunshot.ogg`/`reload.ogg`/`hit.ogg` yourself first per
+   BUILD-PLAN.md's round 0 pattern; if blocked, this is a human-side task
+   like the model fetching was — say so plainly rather than silently
+   shipping without sound (a silent gunfight is explicitly called out as
+   broken-feeling in BUILD-PLAN.md).
+8. **Shootable barrels/bottles are new placed objects** — follow `props.js`'s
+   pattern (`InstancedMesh` where more than ~20 exist, a circle collider per
+   placement) rather than inventing a new placement system, but note these
+   need per-instance *destructible* state (hit → gone/knocked over), which
+   `props.js`'s current rocks/cacti/trees don't need — this is genuinely new
+   ground, not a pure reuse.
+9. **Camera aim mode (right-mouse zoom, narrower FOV, crosshair) should follow
+   this round's `setMounted(bool)` pattern**: a mode flag + dedicated config
+   fields (`CAMERA.aimDistance`/`aimFov`/etc.), not hardcoded numbers inline
+   in `camera.js` — and note aim and mounted can presumably be simultaneous
+   (mounted shooting), so make sure the two modes compose instead of one
+   silently overriding the other.
+10. **Extend `scripts/smoke.mjs`'s `CHECKS`** — at minimum that a fired shot
+    raycast registers a hit on a target placed directly in front, ammo count
+    decrements/resets correctly across reload, and (per BUILD-PLAN.md's own
+    text) something machine-checkable about the muzzle-flash/raycast origin
+    empty actually being parented to the gun barrel tip, not the camera.
+11. Aim (right mouse), fire (left mouse), reload (`R`) are new bindings — add
+    them to `SMOKE-TEST.md`'s control list.
 
 Before declaring the round done: `node scripts/smoke.mjs`, update this file,
 add the new manual items to `SMOKE-TEST.md`, then

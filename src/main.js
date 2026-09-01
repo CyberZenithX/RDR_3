@@ -9,6 +9,8 @@ import { RENDER, SPAWN } from './config.js';
 import { buildWorld } from './world.js';
 import { createPlayerCharacter } from './character.js';
 import { Player } from './player.js';
+import { createHorseCharacter } from './horse-character.js';
+import { Horse } from './horse.js';
 import { ThirdPersonCamera } from './camera.js';
 import { initInput, onPointerLockChanged } from './input.js';
 import { initUI } from './ui.js';
@@ -31,7 +33,9 @@ const ui = initUI();
 // scripts/smoke.mjs reads these — keep both alive in every round.
 window.__frames = 0;
 window.__ready = false;
-window.__debug = { modelsLoaded: { player: false }, playerY: null, grounded: null, propCounts: null };
+window.__debug = { modelsLoaded: { player: false, horse: false }, playerY: null, grounded: null, propCounts: null };
+
+const _scratchSaddlePos = new THREE.Vector3(); // reused every frame — see performance budget rule
 
 async function init() {
   ui.setLoadingText('building world…');
@@ -54,6 +58,13 @@ async function init() {
   window.__debug.tpCamera = tpCamera; // debug hook, not read by gameplay code
   window.__debug.player = player; // debug hook, not read by gameplay code
 
+  ui.setLoadingText('loading horse…');
+  const horseCharacter = await createHorseCharacter();
+  window.__debug.modelsLoaded.horse = !horseCharacter.isPlaceholder;
+  scene.add(horseCharacter.root);
+  const horse = new Horse(horseCharacter, world);
+  window.__debug.horse = horse; // debug hook, not read by gameplay code
+
   initInput(renderer.domElement);
   onPointerLockChanged((locked) => ui.setPointerLocked(locked));
 
@@ -65,10 +76,26 @@ async function init() {
     const dt = Math.min(clock.getDelta(), RENDER.maxDeltaTime);
 
     tpCamera.handleLook();
+
+    // horse.js reads H (whistle) and E (mount/dismount) itself, and drives
+    // player.mounted via player.mount()/dismount() — see horse.js's header.
+    horse.update(dt, tpCamera, player);
+    if (player.mounted) {
+      const saddle = horse.getSaddleTransform(_scratchSaddlePos);
+      player.position.copy(saddle.position);
+      player.meshYaw = saddle.yaw;
+    }
     player.update(dt, tpCamera);
-    tpCamera.update(dt, player.position, player.speed);
+
+    tpCamera.setMounted(player.mounted);
+    ui.setMounted(player.mounted);
+    // While mounted, ignore the horse's own collider in the camera's
+    // occlusion sweep — the rider's pivot sits right on/inside it, which
+    // otherwise collapses the camera to CAMERA.minDistance every frame.
+    tpCamera.update(dt, player.position, player.mounted ? horse.speed : player.speed, player.mounted ? horse.collider : null);
     world.update(player.position);
     ui.updateBoundaryWarning(dt, player.boundaryProximity);
+    ui.updateStamina(horse.stamina, horse.staminaExhausted);
 
     renderer.render(scene, camera);
     window.__frames++;
@@ -80,6 +107,9 @@ async function init() {
     window.__debug.cameraCurrentDistance = tpCamera.currentDistance;
     window.__debug.cameraFov = camera.fov;
     window.__debug.characterRotationY = character.root.rotation.y;
+    window.__debug.horsePos = { x: horse.position.x, y: horse.position.y, z: horse.position.z };
+    window.__debug.horseStamina = horse.stamina;
+    window.__debug.mounted = player.mounted;
   });
 }
 

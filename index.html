@@ -34,6 +34,19 @@
     letter-spacing: .12em; text-transform: uppercase; color: #ffd9c2;
     text-shadow: 0 1px 4px #000;
   }
+
+  #staminaBar {
+    position: fixed; left: 50%; bottom: 6vh; transform: translateX(-50%);
+    width: 220px; height: 10px; border-radius: 6px; overflow: hidden;
+    background: rgba(20, 14, 10, 0.55); border: 1px solid rgba(232, 217, 184, 0.35);
+    pointer-events: none; opacity: 0; transition: opacity 0.3s ease;
+  }
+  #staminaBar.visible { opacity: 1; }
+  #staminaFill {
+    height: 100%; width: 100%; background: linear-gradient(90deg, #b5541f, #d9a441 55%, #f2c869);
+    transition: width 0.08s linear, background-color 0.2s ease;
+  }
+  #staminaFill.exhausted { background: #6b2f1f; }
 </style>
 </head>
 <body>
@@ -46,10 +59,11 @@
 <div id="clickToPlay" class="overlay hidden">
   <h1>DUST &amp; IRON</h1>
   <p>click to play</p>
-  <p class="hint">WASD move &middot; Shift sprint &middot; Space jump &middot; mouse look &middot; Esc to release</p>
+  <p class="hint">WASD move &middot; Shift sprint &middot; Space jump &middot; H whistle horse &middot; E mount/dismount &middot; mouse look &middot; Esc to release</p>
 </div>
 
 <div id="boundaryWarning"><span>you are leaving the territory</span></div>
+<div id="staminaBar"><div id="staminaFill"></div></div>
 
 <script type="importmap">
 {
