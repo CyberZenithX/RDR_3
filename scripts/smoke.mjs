@@ -1012,6 +1012,72 @@ const CHECKS = [
     return missing.length ? `missing audio: ${missing.join(', ')} — the gunfight will be silent` : null;
   }],
 
+  ['no sound is an accidental burst, and none of them clip', async () => {
+    // This exists because the shipped gunshot was three shots. The source file
+    // (OpenGameArt "Gunshots", Black Powder) is a SIX-SHOT take, and the
+    // round-3 trim to 1.6s captured three of them — so every trigger pull
+    // played "tick tick tick". It got past a listen-free review because the
+    // checks at the time only asked whether the file loaded.
+    //
+    // Decoding the buffer and counting onsets is the check that would have
+    // caught it. Also asserts headroom: loudnorm had left all three sitting at
+    // or above 0 dBFS, and Vorbis overshoots on a sharp transient, so the
+    // gunshot was clipping on decode — which is its own kind of "tick".
+    //
+    // The budget is PER FILE (AUDIO.maxOnsets), not a blanket "one": a reload
+    // legitimately is a sequence of mechanical clicks, while a gunshot and a
+    // bullet impact are single events. A blanket rule failed the reload on its
+    // first run, which is the check being wrong rather than the file.
+    const report = await page.evaluate(async () => {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const AUDIO = (await import('/src/config-combat.js')).AUDIO;
+      const out = [];
+      for (const [name, file] of Object.entries(AUDIO.files)) {
+        const buf = await ctx.decodeAudioData(await (await fetch('/audio/' + file)).arrayBuffer());
+        const data = buf.getChannelData(0);
+        const win = Math.max(1, Math.round(buf.sampleRate * 0.01)); // 10ms
+        const env = [];
+        let peak = 0;
+        for (let i = 0; i < data.length; i += win) {
+          let m = 0;
+          for (let j = i; j < Math.min(i + win, data.length); j++) {
+            const a = Math.abs(data[j]);
+            if (a > m) m = a;
+          }
+          env.push(m);
+          if (m > peak) peak = m;
+        }
+        // An onset is a window above a fraction of the file's peak that
+        // follows a run of quiet ones — so a single crack plus its decay tail
+        // counts once, but a second shot 0.4s later counts again.
+        const loud = peak * 0.35;
+        const quietGap = 25; // 250ms below the threshold separates two events
+        let onsets = 0;
+        let sinceLoud = quietGap;
+        const at = [];
+        for (let i = 0; i < env.length; i++) {
+          if (env[i] >= loud) {
+            if (sinceLoud >= quietGap) { onsets++; at.push(+(i * 0.01).toFixed(2)); }
+            sinceLoud = 0;
+          } else sinceLoud++;
+        }
+        out.push({ name, file, onsets, at, peak, max: AUDIO.maxOnsets?.[name] ?? 1, duration: +buf.duration.toFixed(2) });
+      }
+      await ctx.close();
+      return out;
+    });
+    for (const s of report) {
+      if (s.onsets < 1) return `${s.file} has no audible transient at all`;
+      if (s.onsets > s.max) {
+        return `${s.file} contains ${s.onsets} separate hits (at ${s.at.join('s, ')}s), budget is ${s.max} — bad trim, or the source was a multi-take file`;
+      }
+      if (s.peak >= 0.999) return `${s.file} peaks at full scale — it clips on decode`;
+      if (s.peak < 0.05) return `${s.file} peaks at only ${s.peak.toFixed(3)} — effectively silent`;
+    }
+    console.log(`  (info) ${report.map((s) => `${s.name} ${s.duration}s peak ${(20 * Math.log10(s.peak)).toFixed(1)}dB`).join(', ')}`);
+    return null;
+  }],
+
   ['the revolver hangs off the hand bone at life size, not the armature\'s scale', async () => {
     // Two separate traps in one check. First, GLTFLoader strips dots, so the
     // bone is `WristR` and not `Wrist.R` — getting that wrong attaches the gun
@@ -1109,6 +1175,21 @@ const CHECKS = [
       aimWeight: window.__debug.aimWeight,
       mounted: window.__debug.mounted,
     }));
+    // Stand somewhere with nothing behind the camera, and push the horse well
+    // away. Distance is the OUTPUT of an occlusion sweep, so a check that just
+    // measures wherever the previous checks left the player is measuring the
+    // scenery: this failed once reading 1.30 -> 1.30, both clamped to
+    // CAMERA.minDistance, because the horse had wandered up beside the player
+    // and the on-foot camera does not ignore its collider.
+    await page.evaluate(() => {
+      const d = window.__debug;
+      if (d.player.mounted) d.horse.handleMountToggle(d.player);
+      d.player.position.set(0, d.player.world.groundHeightAt(0, 95), 95);
+      d.horse.position.set(40, d.horse.world.groundHeightAt(40, 95), 95);
+      d.tpCamera.pitch = 0.1;
+      d.tpCamera.yaw = 0;
+      d.tpCamera.snap(d.player.position);
+    });
     await page.evaluate(() => { window.__debug.combat.setAimOverride(false); });
     await page.waitForFunction(() => window.__debug.aimWeight < 0.05, null, { timeout: 20000 });
     const hip = await read();
@@ -1118,6 +1199,13 @@ const CHECKS = [
     await page.evaluate(() => { window.__debug.combat.setAimOverride(null); });
     if (!(aimed.fov < hip.fov - 5)) {
       return `fov went ${hip.fov.toFixed(1)} -> ${aimed.fov.toFixed(1)} while aiming; expected it to narrow toward ${cfg.aimFov}`;
+    }
+    // Guard against measuring nothing: if the sweep clamped both samples to
+    // minDistance the camera was simply obstructed, and the comparison below
+    // would be meaningless either way.
+    const cfgMin = await page.evaluate(async () => (await import('/src/config.js')).CAMERA.minDistance);
+    if (hip.dist <= cfgMin + 0.01) {
+      return `the camera was fully obstructed (${hip.dist.toFixed(2)} = minDistance) before aiming — nothing was measured`;
     }
     if (!(aimed.dist < hip.dist - 0.5)) {
       return `camera distance went ${hip.dist.toFixed(2)} -> ${aimed.dist.toFixed(2)} while aiming; expected it to pull in`;

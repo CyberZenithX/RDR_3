@@ -244,8 +244,11 @@ them round 2's — failing at once, far from the cause.
 
 ## Before writing or changing a test
 
-Read [`docs/TESTING.md`](docs/TESTING.md). Three harness gotchas produce
-measurements you cannot trust: `page.waitForFunction()` with an **async**
+Read [`docs/TESTING.md`](docs/TESTING.md). **"The asset loaded" is not "the
+asset is correct"** — round 3 gave audio a loader and no verifier and shipped a
+gunshot that was three gunshots, because the CC0 source was a six-shot take.
+Any binary asset a round adds needs a check on its *content*. Three harness
+gotchas also produce measurements you cannot trust: `page.waitForFunction()` with an **async**
 predicate resolves on its first poll regardless of the result; polling a 0.9s
 event from node at ~3fps headless misses it entirely (sample from inside the
 render loop); and a cross-rig measurement taken inside `horse.update` reads the

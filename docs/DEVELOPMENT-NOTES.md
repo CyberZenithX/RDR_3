@@ -479,6 +479,70 @@ optional asset needs a guard, and every round that touches the character
 interface must re-run the renamed-GLB check — the placeholders implement that
 interface independently and nothing else tests them.
 
+## The gunshot was three gunshots
+
+**Round 3, reported by the human after the round was tagged.** "The gunshot
+audio sounds like 3 consecutive ticks."
+
+**Cause.** `Black Powder.wav` from OpenGameArt's "Gunshots" is a **six-shot
+take** — reports at 0.13, 0.78, 1.45, 2.12, 2.76 and 3.28 seconds. The round-3
+encode assumed a 4-second SFX file was one shot with a long tail, trimmed the
+first 1.6 seconds, and therefore shipped **three** consecutive reports. Every
+trigger pull fired a burst.
+
+Two things let it through. The obvious one: nobody listened, and nobody could —
+this session has no ears. The real one: **the only audio check asserted that
+the file loaded.** A file that loads and is wrong looks identical to a file
+that loads and is right.
+
+**A second, quieter defect in the same file.** All three clips had been run
+through single-pass `loudnorm`. That rides the gain toward an *integrated*
+loudness target, which on a one-shot — one spike, then near-silence — flattens
+the spike and lifts the noise floor, the opposite of what a gunshot wants. It
+also left every file at or above 0 dBFS, and Vorbis overshoots on a sharp
+transient, so the gunshot **clipped on decode** (measured: +0.3 dBFS). A
+clipped crack is its own kind of tick.
+
+`reload.ogg` hid a third: its *source* decodes to **+4.97 dBFS**, so the
+obvious "knock a few dB off" was not enough. `volumedetect` reports it as
+`0.0 dB` because it clamps — the true figure only shows up in `astats` on a
+float pipeline.
+
+**Fix.** One shot cut out of the take (0.115–0.755s, faded over the last 95ms
+so it never reaches the next report), no dynamics processing at all, and a
+plain `volume=<n>dB` to about **-4 dBFS peak** on all three. `AUDIO.volumes`
+does the by-ear balance, because peak-normalising does not.
+
+**The check that now exists.** `smoke.mjs` decodes each one-shot with the Web
+Audio API, builds a 10ms envelope, and counts onsets — a window above 35% of
+the file's peak following 250ms of quiet. More than one onset fails the round,
+as does a peak at full scale. Confirmed to fail on the shipped file before the
+fix, which is the point: it reports "contains 3 separate hits (at 0.00s,
+0.42s, 0.85s)".
+
+**Two follow-on notes from the check itself**, because both are the kind of
+mistake that repeats:
+
+- The first cut of the check asserted **one** onset for every file, and
+  immediately failed `reload.ogg` — which legitimately has two clicks 300ms
+  apart, because a cylinder closing is a sequence. That was the *check* being
+  wrong, not the file. The budget is now per-file in `AUDIO.maxOnsets`. Encode
+  the invariant that actually holds, not the one that happens to hold for the
+  file you are looking at.
+- Adding the check made the run slower, which broke a *different* check: the
+  aim-camera comparison started reading `1.30 -> 1.30`, both clamped to
+  `CAMERA.minDistance`, because the horse had wandered up beside the player in
+  the extra seconds. Camera distance is the output of an occlusion sweep, so
+  that check was sampling the scenery. It now stages its own ground and fails
+  loudly if the "before" reading is already clamped. See
+  [TESTING.md](TESTING.md).
+
+**The general lesson**, and it is not really about audio: *"the asset loaded"
+is not *"the asset is correct"*. Round 0 already learned this for models — a
+GLB under 10KB or with `skins: 0` is a failed download — and wrote a verifier.
+Audio got a loader and no verifier. Any binary asset a round adds needs a
+check on its **content**, not just its presence.
+
 ## The aiming support hand drifted away from the gun at high elevation
 
 **Round 3, caught in a screenshot.** Aiming level looked right; aiming ~26° up

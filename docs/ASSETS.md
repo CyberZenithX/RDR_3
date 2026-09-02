@@ -160,9 +160,37 @@ WAVs.
 
 | File | Source | Licence | Notes |
 |---|---|---|---|
-| `gunshot.ogg` | OpenGameArt "Gunshots" by *kurt*, the `Black Powder.wav` track | **CC0** | Black powder, which is the right era for this game. Trimmed to 1.6s from a 4s take: leading silence stripped, 0.3s fade out. 16KB. |
-| `reload.ogg` | OpenGameArt "2 Gun Reloads" by *starninjas*, `gun_reload.1.ogg` | **CC0** | Already Ogg at source. 0.96s, which is why `COMBAT.reloadTime` is 1.7 — the clip plays once inside the lockout rather than looping. 12KB. |
-| `hit.ogg` | Kenney "Impact Sounds", `impactPlank_medium_000.ogg` | **CC0** | Wood impact — barrels are the main thing being shot. Already Ogg at source. 0.78s, 9KB. |
+| `gunshot.ogg` | OpenGameArt "Gunshots" by *kurt*, the `Black Powder.wav` track | **CC0** | Black powder, which is the right era for this game. **The source is a SIX-shot take** (onsets at 0.13 / 0.78 / 1.45 / 2.12 / 2.76 / 3.28s) — one shot is cut out of it, 0.115–0.755s, with a fade over the last 95ms so it never reaches the next report. 0.64s, 11KB. |
+| `reload.ogg` | OpenGameArt "2 Gun Reloads" by *starninjas*, `gun_reload.1.ogg` | **CC0** | Already Ogg at source, and **clipped**: it decodes to +4.97 dBFS, so it needs -12 dB rather than the -7 that "reduce by a few dB" would suggest. 0.96s, which is why `COMBAT.reloadTime` is 1.7 — the clip plays once inside the lockout rather than looping. 14KB. |
+| `hit.ogg` | Kenney "Impact Sounds", `impactPlank_medium_000.ogg` | **CC0** | Wood impact — barrels are the main thing being shot. Already Ogg at source. 0.78s, 11KB. |
+
+### Two rules for adding audio, both learned the hard way
+
+**1. Count the onsets before you trim.** A four-second SFX file is very often
+several takes in a row, not one event with a long tail. The first cut of
+`gunshot.ogg` assumed a 4s file was one shot, trimmed the first 1.6s, and
+shipped **three** consecutive reports — every trigger pull sounded like
+"tick tick tick". It survived review because the only check at the time asked
+whether the file loaded. `scripts/smoke.mjs` now decodes each one-shot and
+fails if it contains more than one onset.
+
+**2. Do not use `loudnorm` on a one-shot; peak-normalise instead.** Single-pass
+`loudnorm` rides the gain to hit an *integrated* target, which on a file that
+is one spike and a lot of near-silence means flattening the spike and lifting
+the noise floor — the opposite of what a gunshot needs. It also left all three
+files at or above 0 dBFS, and **Vorbis overshoots on a sharp transient**, so
+the gunshot clipped on decode. All three are now a plain `volume=<n>dB` to
+about **-4 dBFS peak**, with no dynamics processing at all.
+
+Measure the *true* peak with `astats` on a float pipeline
+(`-af "aformat=sample_fmts=fltp,astats"`), not `volumedetect` — the latter
+clamps its report at 0.0 dB and will tell you a file that decodes to +5 dBFS
+is fine.
+
+Peak-normalising does not balance the three by ear (a gunshot has a far lower
+average level for its peak than a reload rattle). `AUDIO.volumes` in
+`config-combat.js` is the lever for that, deliberately — the files stay
+unclipped and the mix stays a number in config.
 
 **One licence trap worth recording:** OpenGameArt's "Gunshot Sounds" entry is
 *listed* as CC0 on its page, but the `creativecommons.txt` inside its own zip

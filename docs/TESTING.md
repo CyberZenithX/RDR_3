@@ -69,6 +69,25 @@ per-frame update and sample from within it (see the next gotcha for *which*
 update). Anything transient (an arc, a crossfade, a one-shot clip) needs the
 same treatment.
 
+### 3b. A check that measures the scenery is not measuring your feature
+
+The aim-camera check compares the camera's distance with and without the gun
+up. It passed for several runs, then failed reading **1.30 -> 1.30** — both
+clamped to `CAMERA.minDistance` — because the horse had wandered up beside the
+player and the on-foot camera does not ignore its collider. Nothing about
+aiming had changed; a slower check earlier in the list had given the horse a
+few more seconds to walk over.
+
+Camera distance is the *output* of an occlusion sweep, so a check that reads it
+wherever the previous checks happened to leave the player is sampling the
+world, not the feature. Two fixes, both worth copying:
+
+- **Set the stage explicitly.** Teleport the player to open ground and push the
+  horse away before measuring, the way the shot check moves its target.
+- **Assert you measured something.** If the "before" reading is already at
+  `minDistance`, fail with *that*, rather than letting a clamped comparison
+  decide the result.
+
 ### 3. Sampling both rigs from one wrapper reads one of them a frame stale
 
 `main.js` runs `horse.update()` → `player.setSaddle()` → `player.update()`, so
@@ -94,6 +113,11 @@ Pick a bone no clip translates, or measure a large angle instead.
 
 1. **Extend `CHECKS` every round.** This is not optional; BUILD-PLAN.md
    requires it.
+1b. **"The asset loaded" is not "the asset is correct."** Round 0 learned this
+   for models and wrote `verify-models.mjs` (a GLB under 10KB, or with
+   `skins: 0`, is a failed download). Round 3 gave audio a loader and no
+   verifier, and shipped a gunshot that was three gunshots. Any binary asset a
+   round adds needs a check on its **content**, not just its presence.
 2. **Verify the check actually fails on the pre-fix code.** A check that
    passes on both the broken and the fixed version is worse than nothing.
    Round 2c's seat check was confirmed to fail with "the seat sits 0.44 off
@@ -201,6 +225,22 @@ The last three sample the arc from **inside** the render loop.
 - all three `.ogg` files actually loaded. `audio.js` never throws on a missing
   file (BUILD-PLAN.md's rule), so *asking what it failed to load* is the only
   way a silent gunfight gets noticed
+- **no sound is an accidental burst, and none of them clip.** The file is
+  decoded with the Web Audio API, reduced to a 10ms envelope, and its onsets
+  counted — a window above 35% of the file's peak following 250ms of quiet.
+  This check exists because the shipped `gunshot.ogg` was **three** gunshots:
+  the source is a six-shot take and the trim caught three of them, so every
+  trigger pull went "tick tick tick". Confirmed to fail on the pre-fix file.
+  It also catches a full-scale peak, because `loudnorm` had left all three at
+  0 dBFS and Vorbis overshoots on a transient.
+
+  The budget is **per file** (`AUDIO.maxOnsets`), not a blanket "one". The
+  first cut of this check *was* a blanket one and immediately failed
+  `reload.ogg`, which legitimately contains two clicks 300ms apart — a
+  cylinder closing is a sequence, a gunshot is not. That was the check being
+  wrong rather than the file, and it is worth remembering when writing the
+  next content assertion: **encode the invariant that actually holds, not the
+  one that happens to hold for the file in front of you.**
 - the revolver hangs off `WristR` — the dot-stripped runtime name — and its
   world scale is life-sized, which is the check that the armature's baked scale
   is being divided back out rather than inherited

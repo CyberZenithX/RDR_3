@@ -278,7 +278,25 @@ export const AUDIO = {
   refDistance: 9,
   rolloffFactor: 1.1,
   maxDistance: 320,
-  volumes: { gunshot: 1.0, reload: 0.85, hit: 0.8 },
+  // All three files are peak-normalised to about -4 dBFS, which leaves the
+  // headroom Vorbis needs on a sharp transient but does NOT balance them by
+  // ear: a gunshot is one short spike with a low average level, while the
+  // reload rattle and the wood impact are dense and sit much higher for their
+  // peak. Left flat they read as louder than the shot. This is the lever that
+  // fixes that, and it is the right place for it — the files stay unclipped
+  // and the mix is a number in config.
+  volumes: { gunshot: 1.0, reload: 0.55, hit: 0.6 },
+  // How many discrete transients each clip is allowed to contain, checked by
+  // smoke.mjs against the decoded buffer. This exists because the first
+  // gunshot.ogg was THREE gunshots — the CC0 source is a six-shot take and the
+  // trim caught three of them (docs/DEVELOPMENT-NOTES.md).
+  //
+  // It is per-file rather than a blanket "one", because a reload legitimately
+  // IS a sequence: the cylinder swinging out, the rounds going in, the snap
+  // shut. A gunshot and a bullet impact are single events and anything more is
+  // a bad trim. 4 for the reload leaves room for its mechanics while still
+  // catching two whole reloads spliced together.
+  maxOnsets: { gunshot: 1, reload: 4, hit: 1 },
   // Randomised per shot so a string of six does not sound like a loop.
   pitchJitter: 0.07,
 };

@@ -501,3 +501,33 @@ was in before your play sessions caught two real bugs. Levers are in
 27. **The shot is positional.** Fire, then turn: it should sound like it came
     from where you were pointing, not from inside your head.
 28. **Mute is not implemented.** `M` does nothing until round 7.
+
+## Round 3 follow-up — the gunshot was three gunshots
+
+Reported after the round was tagged: *"the gunshot audio sounds like 3
+consecutive ticks."* Correct, and it was a real bug — the CC0 source file is a
+**six-shot take**, and the trim that produced `gunshot.ogg` caught three of
+them. Every trigger pull fired a burst. Two smaller defects in the same
+pipeline are fixed with it: all three clips had been run through `loudnorm`,
+which flattens a one-shot's transient and had left them clipping at 0 dBFS.
+
+Items 25–27 of the round-3 list still stand. New things to listen for:
+
+29. **One shot per trigger pull.** A single crack with a short tail, not a
+    burst. `smoke.mjs` now decodes each file and counts onsets, so this
+    specific failure cannot ship again silently — but confirm it by ear. The
+    budget is per file (`AUDIO.maxOnsets`): the reload is *allowed* to be
+    several clicks, because a cylinder closing is a sequence.
+30. **The crack should be sharp, not a dull tick.** The files are now
+    peak-normalised with real headroom instead of loudness-normalised. If it
+    still reads thin, the source itself is a dry, distant black-powder
+    recording; `docs/ASSETS.md` lists the other CC0 candidates that were
+    fetched (`22 Magnum`, `22 Pistol`, a Ruger Single Six revolver from the
+    Prepared SFX Library) and swapping is a re-encode, not a code change.
+31. **The three sounds should balance.** Peak-normalising does NOT balance
+    them by ear — a gunshot has a much lower average level for its peak than a
+    reload rattle does. `AUDIO.volumes` is the lever and is now
+    `{gunshot: 1.0, reload: 0.55, hit: 0.6}`. If the reload still drowns the
+    shot, that line is the fix.
+32. **Nothing should distort at close range**, especially firing while
+    mounted, where the muzzle is nearest the listener.

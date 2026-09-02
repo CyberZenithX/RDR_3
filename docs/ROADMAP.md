@@ -120,6 +120,15 @@ stacks `HORSE.jumpAccuracyPenalty` on the mounted one.
   files are looping and mostly ambient, so it wants a `loop()` alongside
   `play()` rather than a reshape. The master mute on `M` maps to the existing
   `setEnabled(false)`.
+  - **Add each new file to `AUDIO.maxOnsets`**, or the onset check will apply
+    its default of 1 and fail every looping ambience immediately. A loop is
+    not a one-shot and probably wants the onset assertion skipped entirely —
+    decide that deliberately rather than by widening the number until it
+    passes.
+  - Round 3's audio bug is worth two minutes of your time before you fetch
+    anything: a CC0 SFX file is very often several takes in a row, and
+    `loudnorm` is the wrong tool for a transient
+    ([ASSETS.md](ASSETS.md), [DEVELOPMENT-NOTES.md](DEVELOPMENT-NOTES.md)).
 - **Round 3's whole feel is unjudged.** Everything in `SMOKE-TEST.md`'s
   round-3 block was tuned from measurements and static screenshots, exactly
   like the horse before it — and the horse's numbers caught two real bugs that
