@@ -333,16 +333,50 @@ These are still open:
 
 ---
 
+## Writing docs — the budget
+
+Measured across rounds 0–3: `docs/` + `CLAUDE.md` + `SMOKE-TEST.md` is **202KB
+against 284KB of source**. The reading protocol keeps a session from paying for
+all of it, but *writing* and *maintaining* it is now the largest single cost of
+finishing a round — larger than the test suite, and much larger than any
+individual rule in it.
+
+Three rules, in priority order:
+
+1. **One fact, one home.** A fact belongs in exactly one `docs/` file, plus a
+   comment at the point in the code where someone would trip over it. Spot
+   checks found single invariants restated in **four to eight** places
+   (`clearY`, the muzzle empty, `staminaExhausted`). Every extra copy is
+   written once and then maintained forever. Everything else **links**.
+2. **The offender is the deep docs, not this index.** Measured: this file's
+   combat block is 1.4KB pointing at 5.9KB of ADRs, which is the ratio an
+   index *should* have — do not "optimise" these blocks, they are the danger
+   you need before opening a file. The duplication is `ARCHITECTURE.md` /
+   `HORSE.md` / `DECISIONS.md` each explaining the same invariant in full.
+   Pick the one whose subject it is; the others get a link.
+3. **A bug writeup is ~150 words**: symptom, cause, fix, and the one lesson
+   that generalises. Round 3's entries ran to 600. The extra 450 said the same
+   thing more slowly.
+
+Not on the chopping block, because each caught a real bug: the smoke suite,
+the placeholder-rig run, the ADRs, and the measured invariants in
+[`docs/ANIMATION.md`](docs/ANIMATION.md). **Cut prose, not verification** —
+verification is cheap now (`--only`), prose is not.
+
 ## Ending a round
 
 Before you declare a round done:
 
-1. `node scripts/smoke.mjs` — and extend its `CHECKS` with whatever this round
-   made machine-checkable.
-2. **Update the docs.** New detail goes in the matching `docs/` file; this file
-   gets at most a line. Update the rounds table, the file map if files changed,
-   and the open-rough-edges list. A fact belongs *here* only if it is unsafe to
-   open a file without it — everything else belongs in `docs/`.
+1. `node scripts/smoke.mjs` — the **whole** suite, and extend its `CHECKS`
+   with whatever this round made machine-checkable. Use `--only` while you are
+   still iterating; run it clean before you tag.
+   Also `node scripts/smoke.mjs --placeholder player.glb` if this round touched
+   the character interface — that one caught a boot crash in round 3.
+2. **Update the docs, to the budget above.** New detail goes in the matching
+   `docs/` file; this file gets at most a line. Update the rounds table, the
+   file map if files changed, and the open-rough-edges list. A fact belongs
+   *here* only if it is unsafe to open a file without it — everything else
+   belongs in `docs/`, once.
 3. Add the new manual items to `SMOKE-TEST.md` (never delete a line), print
    them at the end of the round, and say plainly that they are the human's to
    verify.

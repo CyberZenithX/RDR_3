@@ -16,6 +16,30 @@ const PORT = 8917;
 const FRAME_TARGET = 60;      // frames that must render before we call it alive
 const SETTLE_MS = 4000;       // how long we watch for late errors
 
+// ------------------------------------------------------------------- CLI ---
+// The full suite is 40+ checks and takes ~2 minutes, most of it in the
+// mount/jump sequences. Iterating on ONE check by running all of them is the
+// single most expensive habit this harness encourages, so it doesn't:
+//
+//   node scripts/smoke.mjs                      the whole suite (CI / end of round)
+//   node scripts/smoke.mjs --list               just the labels
+//   node scripts/smoke.mjs --only "shot hits"   substring match, case-insensitive
+//   node scripts/smoke.mjs --placeholder player.glb
+//
+// `--placeholder` withholds a model from the server so the procedural fallback
+// rig loads, which is docs/TESTING.md's "rename the GLB away" procedure without
+// the rename — no `mv` to forget to undo, and the deliberate 404 no longer
+// counts as a failure. That procedure caught a boot-sequence crash in round 3
+// and is worth making a one-liner.
+const argv = process.argv.slice(2);
+const argValue = (name) => {
+  const i = argv.indexOf(name);
+  return i !== -1 && argv[i + 1] ? argv[i + 1] : null;
+};
+const ONLY = argValue('--only') ?? process.env.SMOKE_ONLY ?? null;
+const PLACEHOLDER = argValue('--placeholder') ?? process.env.SMOKE_PLACEHOLDER ?? null;
+const LIST_ONLY = argv.includes('--list');
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -35,6 +59,13 @@ const MIME = {
 const server = createServer(async (req, res) => {
   const url = decodeURIComponent(req.url.split('?')[0]);
   const rel = normalize(url === '/' ? 'index.html' : url.slice(1)).replace(/^(\.\.[/\\])+/, '');
+  // --placeholder: pretend this asset was never shipped, so the fallback path
+  // is what actually boots. See the CLI block above.
+  if (PLACEHOLDER && rel.replace(/\\/g, '/').endsWith(PLACEHOLDER)) {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('withheld by --placeholder');
+    return;
+  }
   try {
     const body = await readFile(join(ROOT, rel));
     res.writeHead(200, { 'Content-Type': MIME[extname(rel)] ?? 'application/octet-stream' });
@@ -95,6 +126,28 @@ async function launchChromium() {
 }
 
 const problems = [];
+
+if (LIST_ONLY) {
+  // Instant on purpose: no browser, no page load, no waiting. This is how you
+  // find the --only pattern you want, so finding it costs nothing.
+  //
+  // The labels are scraped from this file's own source rather than read off
+  // CHECKS, because CHECKS is defined further down — its closures capture
+  // `page`, so the array cannot exist until the browser does. A regex over
+  // our own source is the honest trade for keeping --list free.
+  const src = await readFile(new URL(import.meta.url), 'utf8');
+  const labels = [];
+  for (const line of src.split(/\r?\n/)) {
+    if (!line.startsWith(`  ['`)) continue;
+    const end = line.lastIndexOf(`', async`);
+    if (end > 4) labels.push(line.slice(4, end).replaceAll(`\\'`, `'`));
+  }
+  for (const label of labels) console.log(`  ${label}`);
+  console.log(`\n${labels.length} checks. Run one with: node scripts/smoke.mjs --only "<substring>"`);
+  server.close();
+  process.exit(0);
+}
+
 const browser = await launchChromium();
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 
@@ -1616,11 +1669,21 @@ const CHECKS = [
   }],
 ];
 
+let ran = 0;
 for (const [label, fn] of CHECKS) {
+  // Skipped rather than failed: with a model withheld, the checks whose whole
+  // purpose is asserting that model loaded are not telling us anything.
+  if (PLACEHOLDER && label.includes(PLACEHOLDER)) {
+    console.log(`  skip  ${label} (--placeholder ${PLACEHOLDER})`);
+    continue;
+  }
+  if (ONLY && !label.toLowerCase().includes(ONLY.toLowerCase())) continue;
+  ran++;
   const fail = await fn().catch((e) => `threw: ${e.message}`);
   console.log(`  ${fail ? 'FAIL' : 'ok  '}  ${label}${fail ? ` — ${fail}` : ''}`);
   if (fail) problems.push(`check "${label}": ${fail}`);
 }
+if (ONLY && ran === 0) problems.push(`--only "${ONLY}" matched none of the ${CHECKS.length} checks (try --list)`);
 
 const frames = await page.evaluate(() => window.__frames);
 console.log(`smoke: ${frames} frames rendered`);
@@ -1628,9 +1691,27 @@ console.log(`smoke: ${frames} frames rendered`);
 await browser.close();
 server.close();
 
-if (problems.length) {
-  console.error(`\nsmoke FAILED (${problems.length}):`);
-  for (const p of problems) console.error('  - ' + p);
+// Under --placeholder the missing asset is the whole point of the run, so its
+// 404 and the console.error chromium logs for it are expected, not failures.
+//
+// The HTTP entry is matched on the withheld path, so a 404 for anything else
+// still fails. The console.error is NOT that precise — chromium's
+// "Failed to load resource" text does not carry the URL — so in this mode a
+// resource error for some *other* file would also be forgiven. Acceptable
+// because --placeholder is a deliberate diagnostic, never CI: the unflagged
+// run is the one that has to catch everything, and it still does.
+const expected = PLACEHOLDER
+  ? (p) => p.includes(PLACEHOLDER) || p.includes('Failed to load resource')
+  : () => false;
+const forgiven = problems.filter(expected);
+const real = problems.filter((p) => !expected(p));
+if (forgiven.length) {
+  console.log(`  (expected) ${forgiven.length} problem(s) from withholding ${PLACEHOLDER}`);
+}
+
+if (real.length) {
+  console.error(`\nsmoke FAILED (${real.length}):`);
+  for (const p of real) console.error('  - ' + p);
   process.exit(1);
 }
 console.log('\nsmoke PASSED');

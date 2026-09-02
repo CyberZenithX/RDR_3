@@ -118,10 +118,20 @@ Pick a bone no clip translates, or measure a large angle instead.
    `skins: 0`, is a failed download). Round 3 gave audio a loader and no
    verifier, and shipped a gunshot that was three gunshots. Any binary asset a
    round adds needs a check on its **content**, not just its presence.
-2. **Verify the check actually fails on the pre-fix code.** A check that
-   passes on both the broken and the fixed version is worse than nothing.
-   Round 2c's seat check was confirmed to fail with "the seat sits 0.44 off
-   the horse's spine" when `horse.js`/`player.js` were reverted.
+2. **Verify a REGRESSION check fails on the pre-fix code** — and only a
+   regression check. A check guarding a bug that actually happened is worth
+   nothing until you have seen it go red; round 2c's seat check was confirmed
+   with "the seat sits 0.44 off the horse's spine", and round 3's audio check
+   with "contains 3 separate hits (at 0s, 0.69s, 1.4s)". Those failure strings
+   are also the best description of the bug you will ever write.
+
+   **Do not do this for a check that cannot trivially pass** — a draw-call
+   budget, a file loading, a collider being registered once. Inverting those
+   costs a run and proves something you already know. This used to read as a
+   blanket rule and that was the expensive part of it.
+
+   Use `--only` (below). Confirming one check is **~30s**, not the ~2 minutes
+   the full suite takes.
 3. **Skip skeleton checks when a placeholder rig is in play** — the round-2b,
    2c and 2d pose checks self-skip, because `PlaceholderHorse`/
    `PlaceholderHuman` have no skeleton to assert against.
@@ -135,8 +145,40 @@ Pick a bone no clip translates, or measure a large angle instead.
    until `horse._mountBlendT` reaches `HORSE.mountLerpTime`.
 5. **Measure in the body frame** for anything positional on the horse — see
    [HORSE.md](HORSE.md).
+6. **A check stages the state it depends on.** Round 3's aim-camera check
+   relied on wherever the previous checks left the player, and started failing
+   when an unrelated check earlier in the list got slower and gave the horse
+   time to wander into shot — it was sampling the scenery, not the feature.
+   Position the player, push the horse away, set the camera, *then* measure.
+   Re-mounting when you need a mounted rider is fine and cheap; inheriting a
+   mount you did not ask for is not. This is also what makes `--only`
+   trustworthy, which is what keeps rule 2 cheap.
 
 ---
+
+## Running one check instead of forty-three
+
+The full suite is ~2 minutes and 40+ lines of output, and roughly 30s of that
+is unavoidable boot. Iterating on a single check by running all of them was the
+most expensive habit this harness had, so it no longer requires it:
+
+```bash
+node scripts/smoke.mjs --list                    # instant, no browser
+node scripts/smoke.mjs --only "shot hits"        # ~30s, substring, case-insensitive
+node scripts/smoke.mjs --placeholder player.glb  # boot on the fallback rig
+```
+
+`--only` reports an error if the pattern matches nothing, so a typo cannot
+look like a pass.
+
+`--placeholder` withholds a model from the harness's own web server, which is
+[the renamed-GLB procedure](#verifying-the-placeholder-path) without the
+rename — no `mv` to forget to undo, the deliberate 404 does not count as a
+failure, and the checks that exist to assert *that model loaded* are skipped
+rather than failed.
+
+**Run the whole suite before declaring a round done.** These flags are for the
+loop in between, not a substitute for the final run.
 
 ## What `CHECKS` currently covers
 
@@ -330,9 +372,17 @@ yaw     = atan2(-viewDir.x, -viewDir.z)
 
 ## Verifying the placeholder path
 
+```bash
+node scripts/smoke.mjs --placeholder player.glb
+```
+
+The harness withholds that file from its own web server, so the procedural
+fallback rig is what boots. Nothing on disk moves — the older way was to
+`mv` the GLB aside and remember to put it back, which is one interrupted
+session away from a confusing repo.
+
 Both placeholder rigs are real fallbacks, and both have been verified end to
-end by **temporarily renaming the GLB away** and running `node
-scripts/smoke.mjs`:
+end this way:
 
 - `player.glb` renamed (round 1): game stayed fully playable, absence surfaced
   as one console warning, not a crash.
