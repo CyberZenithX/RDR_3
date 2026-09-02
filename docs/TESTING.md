@@ -88,6 +88,21 @@ world, not the feature. Two fixes, both worth copying:
   `minDistance`, fail with *that*, rather than letting a clamped comparison
   decide the result.
 
+### 2b. Headless does not just render slowly — it *simulates* slowly
+
+`main.js` clamps `dt` to `RENDER.maxDeltaTime` (0.05). At headless's ~3fps that
+is **0.15 seconds of simulation per real second**: sixteen seconds of
+`page.waitForTimeout` buys under two and a half seconds of game. Round 4 found
+this the hard way — a camp watched for sixteen real seconds had fired one round
+each and the AI looked broken when it was merely slow.
+
+**Fix**: for anything that has to run for a while, drive the system directly at
+a fixed step from inside one `page.evaluate` —
+`for (let i = 0; i < 1800; i++) bandits.update(1/60, player)`. It is
+deterministic, it is fast, and it is exactly the loop `main.js` runs. Reserve
+the render loop for things that must actually be *rendered* (draw calls,
+camera framing, anything reading `__frames`).
+
 ### 3. Sampling both rigs from one wrapper reads one of them a frame stale
 
 `main.js` runs `horse.update()` → `player.setSaddle()` → `player.update()`, so
@@ -153,6 +168,25 @@ Pick a bone no clip translates, or measure a large angle instead.
    Re-mounting when you need a mounted rider is fine and cheap; inheriting a
    mount you did not ask for is not. This is also what makes `--only`
    trustworthy, which is what keeps rule 2 cheap.
+
+   **Round 4 paid this three times in one sitting**, and the failures are worth
+   knowing because none of them looked like staging problems:
+   a line-of-sight check failed on a real cactus between two bodies; a
+   shoot-the-bandit check reported `"barrel"` because the previous check had
+   left the player near the test range; and a collider-movement check reported
+   "nothing moved" because the men were already standing on the player and had
+   nowhere to chase to — and again, in the `--placeholder` run only, because
+   bandits outside `BANDIT.activeRadius` are not ticked at all. The fix each
+   time was to put both bodies on the town plateau (flat by construction,
+   prop-free by `PROPS.townKeepOut`) or back at their camp, and *then* measure.
+
+6b. **Freezing a system is a legitimate stage.** `bandits.update = () => {}`
+   around a measurement, restored after, is the same recipe round 2c uses on
+   `horse._updateMounted`. But freeze the *whole* object: round 4's
+   over-the-head shot check moved a bandit's body onto the camera ray and
+   forgot its collider, so the infinitely tall cylinder it was meant to be
+   ignoring stayed back at camp — and the check passed with the fix reverted.
+   A staged object usually has more than one piece.
 
 ---
 
@@ -311,6 +345,48 @@ The last three sample the arc from **inside** the render loop.
 - spread is a real cone and rides in the right order: aimed < hip, and each
   gets worse in the saddle
 
+**Round 4 — bandits**
+
+- `bandit.glb` loaded, three camps of 3–5, none on the placeholder rig
+- **every bandit is an independent skeleton clone** — separate `Skeleton`
+  objects *and* separate `Bone` objects, with geometry still shared. Confirmed
+  to fail with `rig-clone.js`'s rebind reverted ("two bandits share one
+  Skeleton object"), which is the bug that would have made a camp move as one
+  body
+- camps sit on ground, not a hillside: height spread and slope sampled over
+  each camp's own footprint, plus the boundary clamp and the town keep-out
+- a bandit carries its own revolver on its own hand bone at life size — the
+  first test of `weapons.js`'s "written against any skeleton" claim, and of
+  the armature scale being divided out on a *cloned* rig
+- `Death` and `HitRecieve` wired as one-shots, and `setLocomotion` standing
+  aside while either owns the rig
+- **a shot two metres over a bandit's head misses, one at its chest hits.**
+  Both halves: the miss is the `top: Infinity` trap, the hit is
+  `bandits.raycast()` being in the shot path at all. Confirmed to fail with
+  combat's ignore-set line reverted
+- two rounds drop a bandit, a third on the corpse does nothing, the collider
+  is unregistered and the camp's alive count falls
+- line of sight is clear at 20m in the open, blocked by a boulder half way,
+  and clear again when the boulder is removed (which also proves the
+  `BANDIT.losInterval` cache is not stale-sticky)
+- **gunfire wakes the whole camp.** Confirmed to fail on the pre-fix code:
+  the men parked past `sightRange` but inside `hearingRange` all slept
+  through it. This is the round's one real behavioural bug
+- a camp closes, shoots, and kills a player standing in the open — measured at
+  2–10 seconds, against BUILD-PLAN.md's "survivable for a few seconds but
+  stupid". Driven at a fixed step, not by wall clock (gotcha 2b)
+- five hits drop the player; a dead player cannot fire or reload; respawn
+  restores full health and the ability to fight
+- respawn picks the nearer of spawn and the last camp, and lands on the
+  stand-off ring — asserted against `campApproachRadius` too, since a
+  stand-off outside it would un-arm the checkpoint that just used it
+- bandit colliders are registered once, mutate in place, and are never
+  re-added — with the "assert you measured something" guard that at least one
+  actually moved
+- **draw calls with a whole camp on screen**, not just at spawn. The existing
+  budget check samples at the plateau where no bandit is visible and would
+  never have noticed round 4's 126
+
 Two recipes worth reusing:
 
 - **Forcing the aim state.** Headless cannot produce a trusted pointer-locked
@@ -402,14 +478,25 @@ end this way:
   only failures were the four inherent to deleting the file — the 404 itself
   and the checks whose whole purpose is asserting the real GLB loaded.
 
+- `bandit.glb` withheld (round 4): the game boots, eleven capsule bandits man
+  the camps, and every round-4 check passes except the skeleton-clone one,
+  which self-skips. This run is also what caught the collider-movement check
+  measuring nothing (see rule 6).
+
 Do this again whenever a round changes the character interface
 (`setLocomotion` / `setAirborne` / `setRidingPose` / `setAimPose` /
-`hipHeight`), because the placeholders implement that interface independently.
+`playHit` / `setDead` / `hipHeight`), because the placeholders implement that
+interface independently.
 **Round 3 changed it**: `setLocomotion` grew an `aiming` argument,
 `setAimPose` is new, and `PlaceholderHuman` now carries `WristR`/`WristL`
 empties purely so `weapons.js`'s generic bone search finds a hand on it too.
-The round-3 skeleton checks self-skip on the placeholder rig, as the round-2b/
-2c/2d ones do.
+**Round 4 changed it again**: `playHit()` and `setDead(bool)` are new on both
+rigs, and `PlaceholderHuman` implements BUILD-PLAN.md's substitution for them
+(rock back on a hit, tip over and sink on death) since it has no clips.
+`--placeholder bandit.glb` is now a second run worth making, because it is the
+only thing that exercises `bandits.js`'s own fallback path.
+The round-3 and round-4 skeleton checks self-skip on the placeholder rig, as
+the round-2b/2c/2d ones do.
 
 ---
 

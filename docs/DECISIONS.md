@@ -125,8 +125,13 @@ player-anim.js"). Still just numbers, no logic. Round 3's
 exist in both `player.js` and `horse.js` rather than in a shared module. Each
 is under 10 lines, the horse's version has horse-specific thresholds baked in,
 and this project prefers three similar lines over a premature abstraction.
-Revisit only if round 4's bandits need the exact same shapes and the
-duplication starts actually hurting.
+**Reviewed in round 4 and left alone.** `bandit.js` is the third copy of
+`lerpAngle` and of the accel/decel integrator, and the second of `bell()` — all
+still under ten lines, all with different constants. What round 4 did *not*
+duplicate is the one thing that would have hurt: the grip machinery. A bandit
+rig constructs a `RidingPose` it never rides with, purely because `AimPose`
+borrows `_captureGripAxes()` / `_grip()` from it — reuse of one object, not a
+third copy of the maths, so the trigger this ADR named was not pulled.
 
 ### ADR-011 — Test entry points are public methods — *Accepted*
 
@@ -373,6 +378,97 @@ weight, applied even at weight 0: this rig's rest pose is a flat splayed palm,
 so without a permanent grip the revolver sits in an open hand any time the arm
 is down. If round 6 wants a real draw, `hold` is already the parameter to
 animate, and the gun's `setVisible()` is already there.
+
+### ADR-027 — `config-ai.js` holds the bandits **and** the health model — *Accepted*
+
+The fourth config file, and ADR-023 warned that four "would start not to"
+satisfy BUILD-PLAN.md's one-findable-place rule. It is still the right split:
+`config.js` was at 384 of the 400-line cap, bandits are unambiguously a new
+system, and docs/ROADMAP.md named this file in advance.
+
+The real question was `HEALTH`. Player hit points are not obviously a property
+of the bandits. But they are not a property of the *gun* either (a rifle in a
+later round would not change how much a man can take), and `config.js` had no
+room. What decided it: BUILD-PLAN.md states the target as **one sentence** —
+"two body shots kill a bandit, five hits kill the player" — so player health,
+bandit health and both damage numbers are one tuning knob with four dials on
+it. Splitting them across two files to satisfy a filing rule would make the
+one thing the human actually wants to retune harder to find, which is the
+opposite of what the rule is for.
+
+`HEALTH` also carries the death timings (`tipTime`, `sink`) that
+`placeholder-human.js` reads, on the same reasoning: how long a body takes to
+go down is a property of dying, not of a rig.
+
+**Round 5 should not add a fifth.** If the town needs tunables, a
+`config-town.js` is the fifth file — which is the point at which "every
+tunable in one findable place" is worth re-reading rather than re-applying.
+
+### ADR-028 — Bandits get their own firing path, not `combat.js` — *Accepted*
+
+**Context.** docs/ROADMAP.md asked for this decision to be made *before*
+writing: "`Combat` currently hardcodes `player` and `tpCamera`. **A bandit does
+not have a camera.** Either generalise `_resolveAimPoint()` … or give bandits
+their own smaller firing path."
+
+**Decision.** Their own, in `bandit.js` — about forty lines over the parts that
+were already generic: `weapons.js` (the revolver attaches to any skeleton),
+`combat-ray.js` (the geometry query), and the pooled `vfx.js` / `audio.js`.
+
+**Why.** Half of `Combat` is the *player's* half and has no bandit meaning:
+`_resolveAimPoint()` exists because a third-person crosshair is not where the
+gun is, `addRecoil` shakes a camera, `poseState()` feeds a HUD, `_ejectShells`
+needs `tpCamera.getRight()`, and the reload gate reads the horse. Generalising
+it would have meant threading a null camera through all of that, in a file
+already at 350 of the 400-line cap. What a bandit actually needs — a muzzle, a
+spread cone, a ray, a hit — is small, and it needs its *own* accuracy model
+anyway (BUILD-PLAN.md: "bandits miss often enough that standing in the open is
+survivable for a few seconds but stupid").
+
+**Consequences.** Two `_applySpread` implementations and two `bell()`s, both
+under ten lines, both covered by ADR-010. `combat.js` grew by fifteen lines: a
+`bandits` dependency, one extra `raycast` in the shot path and one in the aim
+path, and a `hearShot` broadcast. If round 6's duel needs a third shooter,
+*that* is the moment to extract a shared `fireShot(origin, dir, ignore)`.
+
+### ADR-029 — A hand-written skinned clone, not `SkeletonUtils` — *Accepted*
+
+Eleven bandits share one 1.37MB `bandit.glb`. `Object3D.clone()` cannot do
+that alone: it copies a `SkinnedMesh`'s `skeleton` **by reference**, so every
+clone would be driven by the original's bones and the whole camp would move as
+one body. three.js ships `SkeletonUtils.clone()` for exactly this — and it is
+not in `vendor/three/`, and this session cannot fetch it (CLAUDE.md's
+environment facts).
+
+The alternative was loading the GLB once per bandit: correct, and eleven
+copies of every buffer in RAM and on the GPU. `src/rig-clone.js` is twenty
+lines of well-understood bone remapping instead, guarded by a smoke check that
+was confirmed to fail with the rebind reverted ("two bandits share one
+Skeleton object"). Materials and geometry stay shared by reference, which is
+the whole memory win — and is why a bandit's hit reaction is the `HitRecieve`
+clip rather than BUILD-PLAN.md's "colour flash on the material", which would
+light up all eleven at once.
+
+If a later round vendors another addon, `SkeletonUtils` is worth taking at the
+same time and this file can go.
+
+### ADR-030 — Respawn stands off from the camp rather than landing in it — *Accepted*
+
+BUILD-PLAN.md: "respawn at the config spawn point, or at the last bandit camp
+you approached, whichever is nearer." Read literally, that puts the player
+back in the middle of the four men who just killed them, at full health,
+inside their sight range — a death loop, not a checkpoint.
+
+So "at the camp" is a stand-off ring `BANDIT.respawnStandoff` (55m) out on the
+**town side** of it, which is also the way home. That is outside
+`BANDIT.fireRange` (45) but inside `BANDIT.campApproachRadius` (70), so the
+camp stays armed as the checkpoint rather than un-arming itself the moment it
+is used. The smoke check asserts both bounds, because a stand-off that drifts
+outside the approach radius is the spawn point with extra steps.
+
+The spirit of the requirement — do not make a player ride 400m back to a fight
+— is kept intact. `player.respawn()` remains the single function round 7
+replaces.
 
 ---
 

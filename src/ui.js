@@ -6,6 +6,7 @@
 
 import { UI } from './config.js';
 import { COMBAT } from './config-combat.js';
+import { HEALTH } from './config-ai.js';
 
 export function initUI() {
   const loading = document.getElementById('loading');
@@ -18,6 +19,9 @@ export function initUI() {
   const ammo = document.getElementById('ammo');
   const ammoCount = document.getElementById('ammoCount');
   const ammoPips = document.getElementById('ammoPips');
+  const healthBar = document.getElementById('health');
+  const damageFlash = document.getElementById('damageFlash');
+  const deathScreen = document.getElementById('deathScreen');
   let boundaryOpacity = 0;
 
   // One pip per chamber, built from COMBAT.magazine so a bigger cylinder is
@@ -31,8 +35,22 @@ export function initUI() {
       pips.push(pip);
     }
   }
+  // One notch per hit the player can take, built from HEALTH.playerMax for the
+  // same reason the ammo pips are built from COMBAT.magazine: retuning the
+  // lethality stays one number in one file.
+  const notches = [];
+  if (healthBar) {
+    for (let i = 0; i < HEALTH.playerMax; i++) {
+      const notch = document.createElement('b');
+      healthBar.appendChild(notch);
+      notches.push(notch);
+    }
+  }
   let shownAmmo = -1;
   let shownReloading = null;
+  let shownHealth = -1;
+  let shownDead = null;
+  let shownFlash = -1;
 
   return {
     setLoadingText(text) {
@@ -86,6 +104,33 @@ export function initUI() {
         shownReloading = reloading;
         ammo.classList.toggle('reloading', reloading);
       }
+    },
+
+    /**
+     * The player's hit points, as whole notches — a count, not a bar, because
+     * HEALTH counts hits rather than an abstract pool. Guarded on the value
+     * changing, like the ammo pips: this runs every frame.
+     */
+    updateHealth(current) {
+      if (!healthBar || current === shownHealth) return;
+      shownHealth = current;
+      for (let i = 0; i < notches.length; i++) notches[i].classList.toggle('lost', i >= current);
+      healthBar.classList.toggle('low', current <= 1);
+    },
+
+    /** `flash` is player.damageFlash, a 1→0 ramp. Squared, so the fade reads faster than it leaves. */
+    updateDamageFlash(flash) {
+      if (!damageFlash) return;
+      const opacity = Math.round(flash * flash * 1000) / 1000;
+      if (opacity === shownFlash) return;
+      shownFlash = opacity;
+      damageFlash.style.opacity = String(opacity);
+    },
+
+    setDead(dead) {
+      if (dead === shownDead) return;
+      shownDead = dead;
+      deathScreen?.classList.toggle('hidden', !dead);
     },
   };
 }

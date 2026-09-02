@@ -24,11 +24,29 @@
  */
 
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GUN } from './config-combat.js';
 
 const _boneScale = new THREE.Vector3();
+const _partMatrix = new THREE.Matrix4();
+const _partEuler = new THREE.Euler();
+const _partPos = new THREE.Vector3();
+const _partQuat = new THREE.Quaternion();
+const _partScale = new THREE.Vector3(1, 1, 1);
 
-/** Builds the revolver's geometry, origin at the back of the frame, barrel down +Z. */
+/**
+ * Builds the revolver's geometry, origin at the back of the frame, barrel down
+ * +Z.
+ *
+ * THE SEVEN PARTS ARE MERGED INTO ONE MESH PER MATERIAL — three, not seven.
+ * Round 4 is what made that matter: a gun in every hand means eleven of these,
+ * and each part is a draw call in the main pass AND again in the shadow pass.
+ * Measured with four bandits, the player and the horse on screen at a camp,
+ * merging took the frame from 126 draw calls to well under BUILD-PLAN.md's
+ * ~120 budget. Baking each part's transform into its geometry leaves the
+ * group's own origin and axes untouched, so GUN.holdPosition / holdRotation —
+ * both solved numerically off the live skeleton — stay valid.
+ */
 function buildRevolverMesh() {
   const g = GUN;
   const steel = new THREE.MeshStandardMaterial({
@@ -40,13 +58,14 @@ function buildRevolverMesh() {
   const wood = new THREE.MeshStandardMaterial({ color: g.colorWood, roughness: 0.75, metalness: 0.05 });
 
   const group = new THREE.Group();
+  const parts = new Map([[steel, []], [blued, []], [wood, []]]);
   const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => {
-    const m = new THREE.Mesh(geo, mat);
-    m.position.set(x, y, z);
-    m.rotation.set(rx, ry, rz);
-    m.castShadow = true;
-    group.add(m);
-    return m;
+    _partEuler.set(rx, ry, rz);
+    _partQuat.setFromEuler(_partEuler);
+    _partPos.set(x, y, z);
+    _partMatrix.compose(_partPos, _partQuat, _partScale);
+    geo.applyMatrix4(_partMatrix);
+    parts.get(mat).push(geo);
   };
 
   // Frame: the block the whole gun hangs off, origin at its back face.
@@ -79,6 +98,14 @@ function buildRevolverMesh() {
   add(new THREE.TorusGeometry(g.frameHeight * 0.42, g.barrelRadius * 0.35, 6, 12), steel,
     0, -g.frameHeight * 0.5, g.frameLength * 0.72, 0, Math.PI / 2, 0);
 
+  for (const [material, geometries] of parts) {
+    if (geometries.length === 0) continue;
+    const merged = mergeGeometries(geometries, false);
+    for (const geo of geometries) geo.dispose();
+    const mesh = new THREE.Mesh(merged, material);
+    mesh.castShadow = true;
+    group.add(mesh);
+  }
   return group;
 }
 

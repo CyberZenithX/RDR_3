@@ -208,6 +208,11 @@ export const CLIP_CANDIDATES = {
   run: ['Run', 'Run_Forward', 'Sprint'],
   idleGun: ['Idle_Gun_Pointing', 'Idle_Gun', 'Idle_Gun_Shoot'],
   runGun: ['Run_Shoot', 'Run_Gun', 'Run'],
+  // Round 4's one-shots. `HitRecieve` is MISSPELLED in the asset — searching
+  // for the correct spelling finds nothing (docs/ANIMATION.md), so both forms
+  // are listed and the misspelled one is first because it is the one that hits.
+  hit: ['HitRecieve', 'HitReceive', 'Hit_Reaction', 'Hit'],
+  death: ['Death', 'Die', 'Dead'],
 };
 
 /** Jump pose for the procedural PlaceholderHuman fallback (no GLTF skeleton to retarget onto). Rotation.x only, positive = bent, same convention as its walk/run swing code. */

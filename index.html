@@ -84,6 +84,30 @@
   }
   #ammoPips b.spent { background: #4a3a28; opacity: 0.55; }
   #ammo.reloading #ammoCount { color: #b5541f; }
+
+  /* Health: five notches, one per hit, mirroring the ammo pips on the other
+     side of the screen so the two read as one HUD. */
+  #health {
+    position: fixed; left: 3vw; bottom: 5vh; pointer-events: none;
+    display: flex; align-items: center; gap: 4px;
+  }
+  #health b {
+    display: block; width: 22px; height: 7px; border-radius: 1px;
+    background: #c4553a; box-shadow: 0 0 3px #000;
+    transition: background-color 0.15s ease, opacity 0.15s ease;
+  }
+  #health b.lost { background: #33241d; opacity: 0.55; }
+  #health.low b:not(.lost) { background: #e8703f; }
+
+  /* Damage vignette. Same shape as the boundary warning, redder and tighter —
+     it is a hit, not a place. */
+  #damageFlash {
+    position: fixed; inset: 0; pointer-events: none; opacity: 0;
+    background: radial-gradient(ellipse at center, rgba(150, 20, 10, 0) 45%, rgba(150, 18, 8, 0.66) 100%);
+  }
+
+  #deathScreen { background: radial-gradient(ellipse at center, rgba(60, 10, 6, 0.5) 0%, rgba(10, 5, 3, 0.9) 100%); }
+  #deathScreen h1 { color: #b5541f; }
 </style>
 </head>
 <body>
@@ -98,9 +122,17 @@
   <p>click to play</p>
   <p class="hint">WASD move &middot; Shift sprint &middot; Space jump &middot; H whistle horse &middot; E mount/dismount</p>
   <p class="hint">right mouse aim &middot; left mouse fire &middot; R reload &middot; mouse look &middot; Esc to release</p>
+  <p class="hint">bandit camps are out past the ridge &mdash; two rounds drop a man, five drop you</p>
+</div>
+
+<div id="damageFlash"></div>
+<div id="deathScreen" class="overlay hidden">
+  <h1>YOU DIED</h1>
+  <p class="hint">picking you up off the dirt…</p>
 </div>
 
 <div id="boundaryWarning"><span>you are leaving the territory</span></div>
+<div id="health"></div>
 <div id="staminaBar"><div id="staminaFill"></div></div>
 <div id="crosshair"><i></i><i></i><i></i><i></i><i></i></div>
 <div id="ammo"><span id="ammoPips"></span><span id="ammoCount">6</span></div>

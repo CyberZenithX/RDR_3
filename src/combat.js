@@ -59,13 +59,14 @@ export class Combat {
    *   BUILD-PLAN.md's "keep the game fully playable" rule applies to every
    *   round, and an unarmed rig took the whole boot down once already.
    */
-  constructor({ player, horse, camera, tpCamera, world, targets, vfx, audio, weapon }) {
+  constructor({ player, horse, camera, tpCamera, world, targets, bandits, vfx, audio, weapon }) {
     this.player = player;
     this.horse = horse;
     this.camera = camera;
     this.tpCamera = tpCamera;
     this.world = world;
     this.targets = targets;
+    this.bandits = bandits;
     this.vfx = vfx;
     this.audio = audio;
     this.weapon = weapon;
@@ -91,6 +92,11 @@ export class Combat {
     // exclude themselves from their own fire the same way.
     this._ignore = new Set();
     if (horse?.collider) this._ignore.add(horse.collider);
+    // ...and every bandit's, for a second reason: a bandit's movement collider
+    // is `top: Infinity` by the collision contract, so a shot passing well over
+    // one would "hit" it. `bandits.raycast()` tests an exact foot-to-head
+    // cylinder instead and runs first — see bandits.js's header.
+    if (bandits?.rayIgnore) for (const col of bandits.rayIgnore) this._ignore.add(col);
 
     this._hit = makeHit();
     this._aimHit = makeHit();
@@ -114,6 +120,7 @@ export class Combat {
    * next check would otherwise race.
    */
   get canFire() {
+    if (this.player.dead) return false;
     return !!this.weapon && !this.reloading && this._cooldown <= 0 && this.ammo > 0;
   }
 
@@ -124,6 +131,7 @@ export class Combat {
    * mid-air: both hands are busy staying on a jumping horse.
    */
   get canReload() {
+    if (this.player.dead) return false;
     if (this.reloading || this.ammo >= COMBAT.magazine) return false;
     if (this.player.mounted && this.horse?.isGalloping) return false;
     if (this.player.mounted && this.horse?.jump?.airborne) return false;
@@ -192,7 +200,7 @@ export class Combat {
         this.reloadTimer = 0;
         this.ammo = COMBAT.magazine;
       }
-    } else if (active && isMouseDown(0) && this._cooldown <= 0 && this.ammo > 0) {
+    } else if (active && this.canFire && isMouseDown(0)) {
       // Held fire at the configured interval — fanning the hammer. The gun
       // cannot outrun COMBAT.fireInterval however fast the mouse is clicked.
       this._pendingShots = 1;
@@ -245,6 +253,7 @@ export class Combat {
 
     resetHit(this._hit);
     this.targets?.raycast(_muzzlePos, _dir, COMBAT.range, this._hit);
+    this.bandits?.raycast(_muzzlePos, _dir, COMBAT.range, this._hit);
     raycastColliders(_muzzlePos, _dir, COMBAT.range, this._ignore, this._hit);
     raycastTerrain(_muzzlePos, _dir, COMBAT.range, this._hit);
 
@@ -256,12 +265,17 @@ export class Combat {
     this.vfx?.fire(_muzzlePos, _end);
     this.audio?.play('gunshot', _muzzlePos);
     this.tpCamera.addRecoil(COMBAT.recoilPitchKick, COMBAT.recoilShake);
+    // A camp that is picked apart one man at a time while the rest stand
+    // around reads as broken, so a shot is heard, not just seen.
+    this.bandits?.hearShot(_muzzlePos.x, _muzzlePos.z);
 
     if (this._hit.hit) {
       const groundY = this.world.groundHeightAt(this._hit.point.x, this._hit.point.z);
       this.vfx?.impact(this._hit.point, this._hit.normal, groundY);
       this.audio?.play('hit', this._hit.point);
-      const outcome = this.targets?.hit(this._hit.ref) ?? null;
+      const outcome = this._hit.kind === 'bandit'
+        ? this.bandits?.hit(this._hit.ref, _muzzlePos.x, _muzzlePos.z) ?? null
+        : this.targets?.hit(this._hit.ref) ?? null;
       if (outcome === 'destroyed') {
         this.vfx?.burst(this._hit.point, this._hit.kind === 'bottle' ? 0x2f5e3a : 0x6d4a2a, groundY);
       }
@@ -286,6 +300,7 @@ export class Combat {
     this.camera.getWorldDirection(_camDir);
     resetHit(this._aimHit);
     this.targets?.raycast(_camPos, _camDir, COMBAT.range, this._aimHit);
+    this.bandits?.raycast(_camPos, _camDir, COMBAT.range, this._aimHit);
     raycastColliders(_camPos, _camDir, COMBAT.range, this._ignore, this._aimHit);
     raycastTerrain(_camPos, _camDir, COMBAT.range, this._aimHit);
     if (this._aimHit.hit) _aimPoint.copy(this._aimHit.point);

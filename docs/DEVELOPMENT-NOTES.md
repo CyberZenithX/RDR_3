@@ -557,6 +557,67 @@ as something for the human to judge rather than something claimed as fixed.
 
 ---
 
+## Half a camp slept through the gunfight
+
+**Symptom.** Ten simulated seconds beside a four-man camp: two bandits closed
+and opened fire, the other two patrolled placidly through the firefight and
+never noticed the player at all.
+
+**Cause.** A bandit only alerts on sight, and sight is gated on a ±69° facing
+arc. The two who happened to be looking the right way engaged; the two who
+were not had nothing to tell them. `combat.js` broadcasts the *player's* shots
+via `bandits.hearShot()`, but a bandit's own shot broadcast nothing.
+
+**Fix.** `Bandit._fire()` calls `group.hearShot(player.x, player.z)` — the
+player's position, not the muzzle's. Broadcasting the muzzle would have sent
+three men sprinting toward their own friend.
+
+**The lesson.** Perception rules written per-agent produce group behaviour
+nobody designed. The check that guards it does not observe a live camp — it
+parks the other men past `sightRange` but inside `hearingRange`, so a heard
+shot is the *only* thing that can wake them, and it fails cleanly when the
+broadcast is removed.
+
+## A regression check that passed on the broken code
+
+**Symptom.** The check that a shot two metres over a bandit's head misses was
+written specifically to guard the `top: Infinity` trap, and it passed with the
+fix (combat's ignore-set line) reverted.
+
+**Cause.** The check freezes `bandits.update`, moves the bandit's `position`
+and its rig root onto the camera ray, and fires. It never moved the bandit's
+**collider**, which stayed back at the camp — so the infinitely tall cylinder
+the check was supposed to be tripping over was nowhere near the ray.
+
+**Fix.** Move the collider with the body, and restore it afterwards. The check
+then fails with the ignore set reverted, as it should.
+
+**The lesson.** docs/TESTING.md's rule 2 says confirm a regression check goes
+red on the pre-fix code — this is *why*. A staged object usually has more than
+one piece (body, rig root, collider), and a check that only stages some of
+them measures a world where the bug cannot occur.
+
+## Eleven armed men cost twenty-four draw calls of nothing
+
+**Symptom.** Round 4 measured 126 draw calls with four bandits, the player and
+the horse in frame, against BUILD-PLAN.md's ~120 budget. Spawn was fine at 49.
+
+**Cause.** `weapons.js` built the revolver as seven separate `Mesh`es over
+three materials — one per part, each a draw call in the main pass *and* again
+in the shadow pass. With one armed character that is invisible; with five in
+frame it is forty draws for a gun the size of a hand.
+
+**Fix.** Bake each part's transform into its geometry and `mergeGeometries`
+per material: seven meshes become three. 126 → 102 at a camp, 49 → 45 at
+spawn. The group's origin and axes are untouched, so `GUN.holdPosition` and
+`holdRotation` — both solved numerically off the live skeleton in round 3 —
+stay valid.
+
+**The lesson.** A per-object cost that does not matter at one instance is a
+budget item at eleven. The existing draw-call check sampled at spawn, where no
+bandit is visible, and would never have caught this; there is now a second one
+that stands the player in a camp.
+
 ## Two harness bugs that produced false passes
 
 Both live in [TESTING.md](TESTING.md) because they will bite the next check

@@ -56,9 +56,19 @@ sRGB output, `PCFSoftShadowMap`), the async load sequence, and owns the
    in step 1, because a shot starts at the muzzle empty and the muzzle is on
    the end of a barrel held by a hand that only just finished moving. Firing
    in `pollInput()` aims every shot from last frame's hand position.
-7. `tpCamera.setMounted(...)` / `setAiming(...)` / `ui.setMounted(...)` /
-   `setAiming(...)` / `updateAmmo(...)` — called unconditionally every frame
-   off live state; all idempotent, no edge detection.
+7. `bandits.update(dt, player)` — **after** combat, so the player's round
+   resolves before the return fire. Each bandit thinks, moves, poses its own
+   rig and then fires from its own muzzle, in that order: the same rule step 6
+   obeys for the player, applied per bandit inside one loop.
+8. `tpCamera.setMounted(...)` / `setAiming(...)` / `ui.setMounted(...)` /
+   `setAiming(...)` / `updateAmmo(...)` / `updateHealth(...)` /
+   `updateDamageFlash(...)` / `setDead(...)` — called unconditionally every
+   frame off live state; all idempotent, no edge detection.
+
+There is one more line before step 1: **a dead rider does not stay in the
+saddle**, so `main.js` calls `horse.handleMountToggle(player)` when
+`player.dead && player.mounted`. It uses the sanctioned public method (ADR-011)
+and that method refuses mid-air (ADR-019), so it simply retries next frame.
 
 **Combat's frame is deliberately split in two around the rest of the world**
 (steps 1 and 6). Collapsing it into one call breaks one of those two things:
@@ -154,7 +164,25 @@ builders, wires `update(playerPos)` (shadow follow + grass recenter), exposes
 character loader. **`measureHeight` is reuse-with-caution** — see
 [ASSETS.md](ASSETS.md#measureheight-lies-on-skinned-meshes).
 
-`src/character.js` — `createPlayerCharacter()`. Loads `player.glb`, rescales
+`src/rig-clone.js` — `cloneRig(root)`: a deep copy of a loaded, skinned GLTF
+scene with every `SkinnedMesh` rebound to the copy's **own** bones.
+`Object3D.clone()` shares the skeleton by reference, which would make eleven
+bandits one body. Stands in for `SkeletonUtils`, which is not vendored and
+cannot be fetched here (ADR-029). Geometry and materials stay shared — that is
+the memory win, and the reason nothing may recolour a bandit's material.
+
+`src/health.js` — `Health(max)`: `current`, `fraction`, `dead`,
+`damage(n) -> 'dead'|'hit'|null`, `reset()`. Deliberately knows nothing about
+rigs, respawns or who fired. Player, bandits, round 6's deputies.
+
+`src/character.js` — `createPlayerCharacter()` and `createRigFromGLTF(gltf,
+spec)`. **Not player-only since round 4**: `bandit.glb` shares this rig bone
+for bone, so `bandits.js` passes cloned scenes through the second entry point.
+`hit` and `death` are wired as **one-shots** (`playHit()` returns the flinch's
+own duration, which the caller uses as its stagger; `setDead(bool)` is
+reversible because the player respawns), and `setLocomotion` stands aside while
+either owns the rig — the guard is in here so callers stay dumb.
+Loads `player.glb`, rescales
 to `PLAYER.modelHeight`, wraps `idle`/`walk`/`run` behind
 `{root, height, hipHeight, setLocomotion(state,speed), setAirborne(bool),
 setRidingPose(weight,sway,jump), update(dt)}`. Owns a `RidingPose`, captures
@@ -287,6 +315,39 @@ the pointer-lock click, which is the user gesture browsers require before an
 AudioContext may start. Round 7's looping ambience wants a `loop()` alongside
 `play()`, not a reshape of it.
 
+### Bandits
+
+`src/bandits.js` — the camps. Loads `bandit.glb` **once** and clones a rig per
+man (`rig-clone.js`); builds the campfires (one `InstancedMesh` each for
+stones, logs and ash, plus a collider per fire); owns `rayIgnore` (every bandit
+collider plus the horse's), the `BANDIT.activeRadius` gate, `raycast()` (the
+foot-to-head cylinder the player's shots hit), `hit()` and `hearShot()`.
+`buildBandits()` **never rejects**: a missing GLB is one warning and eleven
+capsule placeholders.
+
+`src/bandit.js` — one bandit's body. Position, a moving circle collider,
+`Health`, the rig, and its **own ~40-line firing path** — not `combat.js`
+(ADR-028). One movement integrator serves every AI state, the way horse.js
+serves both the mounted and unmounted paths. `hasLineOfSight(player)` is two
+raycasts, cached for `BANDIT.losInterval`.
+
+`src/bandit-ai.js` — the brain. `patrol → alert → chase → takeCover → shoot →
+flee → dead`, three-ray steering avoidance and the stuck detector
+BUILD-PLAN.md specifies in place of a navmesh. **Owns no position and no
+velocity**: it writes a heading and returns a target speed, exactly as
+horse-ai.js does. Cover points are the *shoulder* of a rock, not its far side —
+behind it the bandit cannot see either, which turns cover into a loop.
+
+**How anything gets shot.** Neither the player nor a bandit is hit through the
+collider list, and for two different reasons: a bandit's collider is
+`top: Infinity` by the contract below (so a round ten metres overhead would
+"hit" it), and the player registers no collider at all while the horse's
+swallows every round aimed at a mounted rider. Both are explicit cylinders —
+`Bandits.raycast()` for the player's shots, an inline `raycastCylinder` in
+`bandit.js` for theirs — and `bandits.rayIgnore` is folded into `combat.js`'s
+own ignore Set at construction. This is the same shape targets.js already uses
+for a bottle standing on a barrel lid (ADR-025).
+
 ### Camera, input, UI
 
 `src/camera.js` — `ThirdPersonCamera`. Mouse orbit (yaw/pitch),
@@ -379,9 +440,19 @@ resolveCollisions(pos, radius, ignore, clearY)
   object's `.x` / `.z` every frame. Never re-add/remove per frame. The horse is
   the reference implementation; round 4's bandits should follow it.
 - `meta.kind` is `'rock'` / `'cactus'` / `'tree'` on props and `'barrel'` on
-  round 3's targets; the horse's own collider is `'horse'`. Barrel colliders
+  round 3's targets; the horse's own collider is `'horse'`, round 4's are
+  `'bandit'` (carrying `meta.bandit`) and `'campfire'`. Barrel colliders
   also carry `meta.target`, a back-reference to the destructible item, which is
   how a hit is attributed without a second lookup.
+- **Characters keep `top: Infinity`** — a man is not something to be jumped
+  over. That makes the collider list the *wrong* place to resolve a shot at
+  one; see the Bandits section above. A check that wants "everything
+  clearable" should use a positive list of scenery kinds, not "everything but
+  the horse" — round 4 broke exactly that assumption in smoke.mjs.
+- `raycastColliders` has an XZ **broad phase**: a collider further than
+  `maxDist + r` is rejected in five flops. It exists for round 4's short rays
+  (every active bandit casts three 3.4m avoidance rays and a line-of-sight ray
+  every frame against ~600 colliders); a 220m shot is unaffected.
 - **Removing a collider is a real operation now.** `targets.js` calls
   `removeCollider` when something is destroyed. Anything holding a collider
   reference across frames must tolerate it disappearing — `combat.js` keeps the
@@ -442,6 +513,17 @@ resolveCollisions(pos, radius, ignore, clearY)
 - `Horse.isGalloping` — the **gait**, not `staminaExhausted`. The reload gate
   reads this; confusing the two is backwards in both directions.
 - `Targets.raycast(origin, dir, maxDist, out)` / `hit(item)` / `aliveCount`.
+- `Bandits.raycast(origin, dir, maxDist, out)` / `hit(bandit, fromX, fromZ)` /
+  `hearShot(x, z)` / `aliveCount` / `states` / `rayIgnore` / `camps`. Same
+  contract as `Targets`, so `combat.js` tests both against one hit record.
+- `Bandit.damage(n, fromX, fromZ)` / `alive` / `hasLineOfSight(player)` /
+  `ai.state`. `BanditAI.alert(x, z)` is the "something happened over there"
+  entry point.
+- `Player.health` (a `Health`) / `damage(n)` / `dead` / `damageFlash` /
+  `markCamp(camp)` / **`respawn()`** — the one function round 7 replaces with a
+  real checkpoint. Nothing else decides where the player comes back.
+- `character.playHit()` (returns the flinch duration) / `setDead(bool)`. Both
+  rigs implement them; `setLocomotion` is ignored while either is in effect.
 - `makeHit()` / `resetHit()` / `raycastCylinder` / `raycastColliders` /
   `raycastTerrain` — the whole geometry query, reusable for bandit
   line-of-sight in round 4.
@@ -467,7 +549,9 @@ horsePos  horseStamina  mounted
 horseAirborne  horseVelocityY  horseJumpWeight
 aiming  aimWeight  ammo  reloading  shotsFired
 targetCounts  targetsAlive  audioMissing
-targets  combat  renderer                   (live object references)
+playerHealth  playerDead
+banditCounts  banditsAlive  banditStates    drawCalls
+targets  combat  bandits  renderer          (live object references)
 ```
 
 `renderer` is there so `renderer.info.render.calls` — BUILD-PLAN.md's ~120
@@ -497,3 +581,11 @@ existed only while there was a retargeted player jump clip.
   big obstruction-triggered zoom-in. Not visually confirmed; minor.
 - **`resolveBox` has no real caller yet** — written and unit-testable, first
   used by round 5's buildings.
+- **The draw-call budget is tight.** 45 at spawn, **106** with one camp, the
+  horse and the player in frame, against BUILD-PLAN.md's ~120. Round 4 found
+  126 and got it back by merging the revolver's seven part-meshes into one per
+  material (`weapons.js`); a smoke check now samples at a camp as well as at
+  spawn. Round 5's buildings and round 7's performance pass share what is left.
+- **Dead bandits are never cleaned up.** The body stays, and its clamped Death
+  clip is still mixer-updated whenever the player is inside
+  `BANDIT.activeRadius`.

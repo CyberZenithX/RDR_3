@@ -178,6 +178,12 @@ export const VFX = {
   tracerDuration: 0.06,
   tracerRadius: 0.011,
   tracerColor: 0xffe9b0,
+  // Ring sizes, both round 4's. One shooter needed neither: a revolver cannot
+  // outrun COMBAT.fireInterval. A camp of four bandits can, so a single tracer
+  // mesh would be handed round and only ever show one shot in flight, and the
+  // parented player flash cannot also be at a bandit's barrel (see vfx.js).
+  tracerCount: 4,
+  enemyFlashCount: 3,
 
   sparkCount: 9,
   sparkDuration: 0.28,

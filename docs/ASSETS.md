@@ -24,6 +24,7 @@ All three are **Quaternius, CC0 1.0**.
 |---|---|---|---|---|---|
 | `models/player.glb` | "Farmer" (Ultimate Modular Men Pack) | `poly.pizza/m/7pn3R6hPvE` | 1338 | 4 | 4 |
 | `models/bandit.glb` | "Punk" (Ultimate Modular Men Pack) | `poly.pizza/m/BTALZymknF` | 1342 | 4 | 4 |
+| | *Round 4 loads this **once** and clones a rig per bandit (`src/rig-clone.js`, ADR-029) — eleven men, one download, one set of GPU buffers. Geometry and materials are shared by reference, so **nothing may recolour a bandit's material in place**.* | | | | |
 | `models/horse.glb` | "Horse" (Animated Animal Pack) | `poly.pizza/m/qvTrSG9pZF` | 1082 | 1 | 1 |
 
 `audio/` is **empty**. Round 3 needs `gunshot.ogg`, `reload.ogg`, `hit.ogg`;
@@ -160,7 +161,7 @@ WAVs.
 
 | File | Source | Licence | Notes |
 |---|---|---|---|
-| `gunshot.ogg` | OpenGameArt "Gunshots" by *kurt*, the `Black Powder.wav` track | **CC0** | Black powder, which is the right era for this game. **The source is a SIX-shot take** (onsets at 0.13 / 0.78 / 1.45 / 2.12 / 2.76 / 3.28s) — one shot is cut out of it, 0.115–0.755s, with a fade over the last 95ms so it never reaches the next report. 0.64s, 11KB. |
+| `gunshot.ogg` | OpenGameArt "Gunshots" by *kurt*, the `22 Magnum.wav` track | **CC0** | Swapped post-round-3: the `Black Powder.wav` cut was a muffled low boom that did not read as a revolver. `.22 WMR` is a cartridge revolver round — a sharp crack that fits the game's Colt SAA. **The source is a 3-shot take** (≈2.16s; reports at ≈0.24 / 0.94 / 1.66s) — shot 1 is cut out, 0.18–0.78s, with a 100ms fade over the tail. Source hard-clips at 0 dBFS, so the encode is `volume=-4dB` and no dynamics; decodes to −3.3 dBFS. 0.60s, 8KB. `AUDIO.volumes.gunshot` stays 1.0. |
 | `reload.ogg` | OpenGameArt "2 Gun Reloads" by *starninjas*, `gun_reload.1.ogg` | **CC0** | Already Ogg at source, and **clipped**: it decodes to +4.97 dBFS, so it needs -12 dB rather than the -7 that "reduce by a few dB" would suggest. 0.96s, which is why `COMBAT.reloadTime` is 1.7 — the clip plays once inside the lockout rather than looping. 14KB. |
 | `hit.ogg` | Kenney "Impact Sounds", `impactPlank_medium_000.ogg` | **CC0** | Wood impact — barrels are the main thing being shot. Already Ogg at source. 0.78s, 11KB. |
 

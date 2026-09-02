@@ -618,7 +618,14 @@ const CHECKS = [
       const { colliders } = await import('/src/collision.js');
       const { heightAt } = await import('/src/terrain.js');
       const cfg = await import('/src/config-horse.js');
-      const props = colliders.filter((c) => c.meta?.kind && c.meta.kind !== 'horse');
+      // A POSITIVE list of the kinds that are meant to be clearable. It used
+      // to be "anything that isn't the horse", which round 4 broke by adding
+      // eleven bandits and three campfires — all of which keep top: Infinity
+      // ON PURPOSE (a character is not something to be jumped over). An
+      // exclusion list quietly turns every future unjumpable thing into a
+      // failure of this check; an inclusion list says what it means.
+      const SCENERY = ['rock', 'cactus', 'tree', 'barrel'];
+      const props = colliders.filter((c) => SCENERY.includes(c.meta?.kind));
       const infinite = props.filter((c) => !Number.isFinite(c.top)).length;
       const heights = (kind) => props.filter((c) => !kind || c.meta.kind === kind)
         .map((c) => c.top - heightAt(c.x, c.z)).sort((a, b) => a - b);
@@ -1629,6 +1636,587 @@ const CHECKS = [
       }
     }
     return null;
+  }],
+
+  // Round 4 ---------------------------------------------------------------
+  ['bandit.glb loaded, and every camp is manned (not the capsule placeholder)', async () => {
+    const info = await page.evaluate(() => {
+      const b = window.__debug?.bandits;
+      if (!b) return null;
+      return {
+        counts: b.counts,
+        alive: b.aliveCount,
+        placeholders: b.bandits.filter((x) => x.character.isPlaceholder).length,
+        perCamp: b.camps.map((c) => c.count),
+      };
+    });
+    if (!info) return 'window.__debug.bandits is missing — no bandits were built';
+    if (info.counts.camps < 3) return `only ${info.counts.camps} camps`;
+    if (info.perCamp.some((n) => n < 3 || n > 5)) return `camp sizes ${JSON.stringify(info.perCamp)} — BUILD-PLAN.md asks for 3-5 per camp`;
+    if (info.placeholders > 0) return `${info.placeholders} of ${info.counts.bandits} bandits fell back to the capsule placeholder`;
+    return info.alive === info.counts.bandits ? null : `${info.alive} alive of ${info.counts.bandits} at boot`;
+  }],
+
+  ['every bandit is an independent skeleton clone, not eleven copies of one body', async () => {
+    // THE regression guard for rig-clone.js. `Object3D.clone()` copies a
+    // SkinnedMesh's `skeleton` BY REFERENCE, so without the rebind every bandit
+    // would be driven by the same bones and the whole camp would move as one
+    // body. Two things have to be true: separate Skeleton objects, and
+    // separate Bone objects inside them.
+    const info = await page.evaluate(() => {
+      const list = window.__debug.bandits.bandits;
+      const skinOf = (b) => {
+        let found = null;
+        b.character.root.traverse((n) => { if (!found && n.isSkinnedMesh) found = n; });
+        return found;
+      };
+      // Self-skip on the procedural fallback, per docs/TESTING.md rule 3:
+      // PlaceholderHuman is a Group of capsules with no skeleton to assert
+      // against, and `--placeholder bandit.glb` is a supported run.
+      if (list[0].character.isPlaceholder) return { placeholder: true };
+      const a = skinOf(list[0]);
+      const c = skinOf(list[1]);
+      if (!a || !c) return { skinned: false };
+      return {
+        skinned: true,
+        sameSkeleton: a.skeleton === c.skeleton,
+        sameBone: a.skeleton.bones[0] === c.skeleton.bones[0],
+        boneCount: a.skeleton.bones.length,
+        sameGeometry: a.geometry === c.geometry, // SHARED on purpose — that is the memory win
+        distinctRoots: list[0].character.root !== list[1].character.root,
+      };
+    });
+    if (info.placeholder) return null;
+    if (!info.skinned) return 'no SkinnedMesh found on a bandit rig — this rig cannot be animated per-bandit';
+    if (info.sameSkeleton) return 'two bandits share one Skeleton object — every bandit will animate identically';
+    if (info.sameBone) return 'two bandits share their bones — the skeleton was cloned but not rebound';
+    if (!info.distinctRoots) return 'two bandits share one scene root';
+    if (!info.sameGeometry) return 'bandit geometry is NOT shared — the clone is duplicating buffers it should reuse';
+    return info.boneCount > 20 ? null : `only ${info.boneCount} bones on a bandit skeleton`;
+  }],
+
+  ['bandit camps sit on real ground, inside the boundary and clear of the town', async () => {
+    // Placed by hand, so the thing worth checking is that the hand-written
+    // numbers still agree with the terrain and with everyone else's limits.
+    const info = await page.evaluate(async () => {
+      const { CAMPS } = await import('/src/config-ai.js');
+      const { heightAt, normalAt } = await import('/src/terrain.js');
+      const { TOWN, BOUNDARY, PROPS } = await import('/src/config.js');
+      return CAMPS.map((camp) => {
+        let minH = Infinity; let maxH = -Infinity; let maxSlope = 0;
+        for (let a = 0; a < 12; a++) {
+          for (const r of [0, 6, 12]) {
+            const x = camp.x + Math.cos((a / 12) * Math.PI * 2) * r;
+            const z = camp.z + Math.sin((a / 12) * Math.PI * 2) * r;
+            const h = heightAt(x, z);
+            minH = Math.min(minH, h); maxH = Math.max(maxH, h);
+            maxSlope = Math.max(maxSlope, 1 - normalAt(x, z).y);
+          }
+        }
+        return {
+          name: camp.name,
+          spread: maxH - minH,
+          slope: maxSlope,
+          fromTown: Math.hypot(camp.x - TOWN.centerX, camp.z - TOWN.centerZ),
+          limit: BOUNDARY.playerLimit,
+          keepOut: PROPS.townKeepOut,
+        };
+      });
+    });
+    for (const c of info) {
+      if (c.fromTown + 15 > c.limit) return `camp "${c.name}" is ${c.fromTown.toFixed(0)} out, past the ${c.limit} boundary clamp`;
+      if (c.fromTown < c.keepOut) return `camp "${c.name}" is inside the town keep-out (${c.fromTown.toFixed(0)} < ${c.keepOut})`;
+      if (c.spread > 8) return `camp "${c.name}" spans ${c.spread.toFixed(1)}m of height across its footprint — that is a hillside`;
+      if (c.slope > 0.25) return `camp "${c.name}" sits on a ${c.slope.toFixed(2)} slope`;
+    }
+    console.log(`  (info) camps: ${info.map((c) => `${c.name} ${c.fromTown.toFixed(0)}m out, ${c.spread.toFixed(1)}m spread`).join('; ')}`);
+    return null;
+  }],
+
+  ['a bandit carries its own revolver on its own hand bone, at life size', async () => {
+    // weapons.js was written generically in round 3 against "any loaded
+    // skeleton"; this is the first time anything but the player tested that
+    // claim, and it is also the check that the armature's baked scale is being
+    // divided back out on a CLONED rig rather than only on the original.
+    const info = await page.evaluate(() => {
+      const b = window.__debug.bandits.bandits[0];
+      const w = b.character.weapon;
+      if (!w) return { weapon: false };
+      w.syncWorld();
+      const s = new (b.position.constructor)();
+      w.group.getWorldScale(s);
+      return {
+        weapon: true,
+        attached: w.attachedToHand,
+        boneName: w.handBone?.name ?? null,
+        scale: s.x,
+        muzzleUnderRig: w.muzzle.parent === w.group && b.character.root.getObjectByName(w.handBone?.name ?? '') === w.handBone,
+      };
+    });
+    if (!info.weapon) return 'the bandit rig has no weapon at all';
+    if (!info.attached) return `the revolver fell back to the rig root (hand bone was ${info.boneName})`;
+    if (!info.muzzleUnderRig) return 'the muzzle empty is not under this bandit\'s own hand bone';
+    if (!(info.scale > 0.5 && info.scale < 2)) return `the bandit's revolver has world scale ${info.scale} — the armature scale is not being divided out`;
+    return null;
+  }],
+
+  ['Death and HitRecieve are wired as one-shots, and a dead rig stops taking gait orders', async () => {
+    const info = await page.evaluate(async () => {
+      const THREE = await import('three');
+      const rig = window.__debug.bandits.bandits.find((b) => b.alive).character;
+      if (rig.isPlaceholder) return { placeholder: true };
+      const have = { death: !!rig.actions.death, hit: !!rig.actions.hit };
+      const flinch = rig.playHit();
+      const duringFlinch = rig._activeName;
+      rig.setLocomotion('run', 5, false);
+      const ignoredWhileFlinching = rig._activeName === duringFlinch;
+      rig._oneShotT = 0;
+      rig.setDead(true);
+      const dead = {
+        name: rig._activeName,
+        loop: rig.actions.death?.loop === THREE.LoopOnce,
+        clamp: rig.actions.death?.clampWhenFinished === true,
+      };
+      rig.setLocomotion('run', 5, false);
+      const ignoredWhileDead = rig._activeName === 'death';
+      rig.setDead(false);
+      return { have, flinch, duringFlinch, ignoredWhileFlinching, dead, ignoredWhileDead, revived: rig._activeName };
+    });
+    if (info.placeholder) return null; // no skeleton and no clips to assert against
+    if (!info.have.death || !info.have.hit) return `missing clips: ${JSON.stringify(info.have)} — HitRecieve is misspelled in the asset, check the candidate list`;
+    if (info.duringFlinch !== 'hit') return `playHit() activated "${info.duringFlinch}", not the hit clip`;
+    if (!(info.flinch > 0.05)) return `playHit() reported a ${info.flinch}s flinch — the caller uses that as its stagger`;
+    if (!info.ignoredWhileFlinching) return 'setLocomotion overrode the flinch — the guard is not holding';
+    if (info.dead.name !== 'death') return `setDead(true) activated "${info.dead.name}"`;
+    if (!info.dead.loop || !info.dead.clamp) return 'the death clip is not LoopOnce+clampWhenFinished — the body will pop back up';
+    if (!info.ignoredWhileDead) return 'setLocomotion overrode the death clip';
+    if (info.revived === 'death') return 'setDead(false) left the death clip running — the player cannot respawn';
+    return null;
+  }],
+
+  ['a shot over a bandit\'s head misses; one at its chest hits', async () => {
+    // The `top: Infinity` trap. A bandit's MOVEMENT collider is an infinitely
+    // tall cylinder by the collision contract (a character is not something to
+    // be jumped over), so if the shot path went through the collider list a
+    // round ten metres above one would "hit" it. Both halves matter: the miss
+    // proves the collider is being ignored, the hit proves bandits.raycast()
+    // put something exact back in its place.
+    //
+    // Staged on the town plateau looking inward: flat by construction and
+    // prop-free by PROPS.townKeepOut, so nothing else can be on the ray. Run
+    // from wherever the previous check left the player, this reported "barrel"
+    // — measuring the scenery, not the feature (docs/TESTING.md rule 6).
+    await page.evaluate(() => {
+      const d = window.__debug;
+      d.player.position.set(60, 0, 0);
+      d.player.position.y = d.player.world.groundHeightAt(60, 0);
+      d.tpCamera.yaw = Math.PI / 2; // looking toward -X, into the empty plateau
+      d.tpCamera.pitch = 0;
+      d.tpCamera.snap(d.player.position);
+    });
+    const settle = await page.evaluate(() => window.__frames);
+    await page.waitForFunction((n) => window.__frames > n + 3, settle, { timeout: 30000 });
+    const info = await page.evaluate(async () => {
+      const { BANDIT } = await import('/src/config-ai.js');
+      const { COMBAT } = await import('/src/config-combat.js');
+      const d = window.__debug;
+      const bandit = d.bandits.bandits.find((b) => b.alive);
+      // Freeze the group so the terrain snap cannot move the body between
+      // placing it and firing at it — the same recipe round 2c uses on
+      // horse._updateMounted.
+      const savedUpdate = d.bandits.update;
+      d.bandits.update = () => {};
+      const savedSpread = { hip: COMBAT.spreadHip, aim: COMBAT.spreadAim };
+      COMBAT.spreadHip = 0;
+      COMBAT.spreadAim = 0;
+      const savedPos = bandit.position.clone();
+      const savedHealth = bandit.health.current;
+
+      const fireAt = (dropBy) => {
+        // Read the camera's LIVE direction and move the BANDIT onto that ray —
+        // never solve the camera onto a target (docs/TESTING.md).
+        const eye = new (savedPos.constructor)();
+        const dir = new (savedPos.constructor)();
+        d.combat.camera.getWorldPosition(eye);
+        d.combat.camera.getWorldDirection(dir);
+        const at = eye.clone().addScaledVector(dir, 16);
+        bandit.position.set(at.x, at.y - BANDIT.chestHeight - dropBy, at.z);
+        bandit.character.root.position.copy(bandit.position);
+        // The MOVEMENT COLLIDER has to come too, or the overhead half of this
+        // check proves nothing: the infinitely tall cylinder it is supposed to
+        // be ignoring would still be back at the camp, nowhere near the ray.
+        // Confirmed — with this line missing the check passed even with the
+        // ignore set reverted.
+        if (bandit.collider) { bandit.collider.x = bandit.position.x; bandit.collider.z = bandit.position.z; }
+        bandit.health.current = 99;
+        d.combat.lastHit = null;
+        d.combat._cooldown = 0;
+        d.combat.ammo = COMBAT.magazine;
+        d.combat.tryFire();
+        d.combat.update(1 / 60);
+        return d.combat.lastHit;
+      };
+      const chest = fireAt(0);
+      // Now drop the whole body so the same ray passes two metres over its head.
+      const overhead = fireAt(BANDIT.modelHeight + 2);
+
+      bandit.position.copy(savedPos);
+      bandit.character.root.position.copy(savedPos);
+      if (bandit.collider) { bandit.collider.x = savedPos.x; bandit.collider.z = savedPos.z; }
+      bandit.health.current = savedHealth;
+      COMBAT.spreadHip = savedSpread.hip;
+      COMBAT.spreadAim = savedSpread.aim;
+      d.bandits.update = savedUpdate;
+      return { chest, overhead };
+    });
+    if (info.chest?.kind !== 'bandit') return `a shot at the chest reported "${info.chest?.kind}" — bandits.raycast() is not in the shot path`;
+    if (info.overhead?.kind === 'bandit') return 'a shot two metres over a bandit\'s head still hit it — the movement collider is not in combat\'s ignore set';
+    return null;
+  }],
+
+  ['two rounds drop a bandit; the body stops colliding and the camp count falls', async () => {
+    // BUILD-PLAN.md's feel target, and the collision contract's "removing a
+    // collider is a real operation now", in one check.
+    const info = await page.evaluate(async () => {
+      const { colliders } = await import('/src/collision.js');
+      const d = window.__debug;
+      const camp = d.bandits.camps[0];
+      const bandit = d.bandits.bandits.find((b) => b.alive && b.camp === camp);
+      const before = { alive: camp.alive, colliders: colliders.length };
+      const one = d.bandits.hit(bandit, bandit.position.x + 5, bandit.position.z);
+      const midHealth = bandit.health.current;
+      const two = d.bandits.hit(bandit, bandit.position.x + 5, bandit.position.z);
+      const three = d.bandits.hit(bandit, bandit.position.x + 5, bandit.position.z);
+      return {
+        before, one, two, three, midHealth,
+        alive: bandit.alive,
+        state: bandit.ai.state,
+        campAlive: camp.alive,
+        colliders: colliders.length,
+        colliderCleared: bandit.collider === null,
+      };
+    });
+    if (info.one !== 'hit') return `the first round reported "${info.one}", not a hit`;
+    if (info.midHealth !== 1) return `a bandit was on ${info.midHealth} hit points after one round — BUILD-PLAN.md asks for two body shots`;
+    if (info.two !== 'dead') return `the second round reported "${info.two}" — a bandit is taking more than two rounds`;
+    if (info.three !== null) return `a third round on a corpse reported "${info.three}" — death is firing twice`;
+    if (info.alive) return 'the bandit is still alive after two rounds';
+    if (info.state !== 'dead') return `the AI state is "${info.state}", not dead`;
+    if (info.campAlive !== info.before.alive - 1) return `camp alive count went ${info.before.alive} -> ${info.campAlive}`;
+    if (!info.colliderCleared || info.colliders !== info.before.colliders - 1) {
+      return `the body still blocks the road (${info.before.colliders} -> ${info.colliders} colliders)`;
+    }
+    return null;
+  }],
+
+  ['a bandit sees the player, and stops seeing them behind a rock', async () => {
+    const info = await page.evaluate(async () => {
+      const { addCircleCollider, removeCollider } = await import('/src/collision.js');
+      const d = window.__debug;
+      const bandit = d.bandits.bandits.find((b) => b.alive);
+      const savedUpdate = d.bandits.update;
+      d.bandits.update = () => {};
+      const savedPlayer = d.player.position.clone();
+      const savedBandit = bandit.position.clone();
+      // Set the stage rather than measuring the scenery (docs/TESTING.md rule
+      // 6): both bodies onto the town plateau, which is flat by construction
+      // and prop-free by PROPS.townKeepOut, twenty metres apart. Measured on
+      // whatever ground the bandit happened to be standing on, this failed —
+      // a real rise or a real cactus between them is not a bug in sight.
+      bandit.position.set(40, 0, 20);
+      bandit.position.y = d.player.world.groundHeightAt(40, 20);
+      d.player.position.set(60, 0, 20);
+      d.player.position.y = d.player.world.groundHeightAt(60, 20);
+      bandit._losT = 0;
+      const clear = bandit.hasLineOfSight(d.player);
+      // A boulder tall enough to stand behind, exactly half way.
+      const rock = addCircleCollider(50, 20, 2.5, { kind: 'rock' }, bandit.position.y + 4);
+      bandit._losT = 0;
+      const blocked = bandit.hasLineOfSight(d.player);
+      removeCollider(rock);
+      bandit._losT = 0;
+      const clearAgain = bandit.hasLineOfSight(d.player);
+      bandit.position.copy(savedBandit);
+      if (bandit.collider) { bandit.collider.x = savedBandit.x; bandit.collider.z = savedBandit.z; }
+      d.player.position.copy(savedPlayer);
+      d.bandits.update = savedUpdate;
+      return { clear, blocked, clearAgain };
+    });
+    if (!info.clear) return 'a bandit could not see a player standing 20m away in the open';
+    if (info.blocked) return 'a bandit saw straight through a 4m boulder — line of sight is not testing the collider list';
+    if (!info.clearAgain) return 'sight did not come back when the boulder was removed — the result is cached rather than recomputed';
+    return null;
+  }],
+
+  ['gunfire wakes the whole camp, not just the men already facing you', async () => {
+    // REGRESSION CHECK, confirmed to fail on the pre-fix code: measured at a
+    // live camp, only the two bandits who happened to be looking the right way
+    // ever joined the fight while the other two patrolled through it, because
+    // nothing broadcast a bandit's own shot. Staged rather than observed — the
+    // other men are parked past BANDIT.sightRange but inside
+    // BANDIT.hearingRange, so a heard shot is the ONLY thing that can wake them.
+    const info = await page.evaluate(async () => {
+      const { BANDIT } = await import('/src/config-ai.js');
+      const d = window.__debug;
+      const camp = d.bandits.camps.find((c) => c.alive >= 3);
+      const men = d.bandits.bandits.filter((b) => b.camp === camp && b.alive);
+      const saved = men.map((m) => m.position.clone());
+      const savedPlayer = d.player.position.clone();
+
+      d.player.position.set(camp.x + 14, 0, camp.z);
+      d.player.position.y = d.player.world.groundHeightAt(d.player.position.x, d.player.position.z);
+
+      const mid = (BANDIT.sightRange + BANDIT.hearingRange) / 2; // blind to sight, inside earshot
+      men.forEach((m, i) => {
+        m.ai.alerted = false;
+        m.ai.memory = 0;
+        m.ai.alertTimer = 0;
+        m.ai.state = 'patrol';
+        m._losT = 0;
+        if (i === 0) {
+          // The one who can see: right in front of the player, facing them.
+          m.position.set(d.player.position.x - 12, 0, d.player.position.z);
+          m.position.y = d.player.world.groundHeightAt(m.position.x, m.position.z);
+          m.yaw = Math.atan2(-(d.player.position.x - m.position.x), -(d.player.position.z - m.position.z));
+          m._fireTimer = 0;
+        } else {
+          const a = (i / men.length) * Math.PI * 2;
+          m.position.set(d.player.position.x + Math.cos(a) * mid, 0, d.player.position.z + Math.sin(a) * mid);
+          m.position.y = d.player.world.groundHeightAt(m.position.x, m.position.z);
+        }
+        if (m.collider) { m.collider.x = m.position.x; m.collider.z = m.position.z; }
+        m.ai.anchor.copy(m.position);
+      });
+
+      const startAmmo = men[0].ammo;
+      let steps = 0;
+      for (; steps < 900; steps++) {
+        d.bandits.update(1 / 60, d.player);
+        if (men[0].ammo < startAmmo) break;
+      }
+      const woken = men.slice(1).map((m) => m.ai.alerted);
+      const distances = men.slice(1).map((m) => Math.hypot(m.position.x - d.player.position.x, m.position.z - d.player.position.z));
+
+      men.forEach((m, i) => {
+        m.position.copy(saved[i]);
+        if (m.collider) { m.collider.x = m.position.x; m.collider.z = m.position.z; }
+        m.ai.anchor.copy(m.position);
+        m.ai.alerted = false;
+        m.ai.memory = 0;
+      });
+      d.player.position.copy(savedPlayer);
+      return { steps, fired: men[0].ammo < startAmmo, woken, distances, sight: BANDIT.sightRange, hearing: BANDIT.hearingRange };
+    });
+    if (!info.fired) return `the bandit in front of the player never fired in ${info.steps} steps — the check proved nothing`;
+    if (info.distances.some((x) => x <= info.sight)) {
+      return `a "deaf" bandit ended up ${Math.min(...info.distances).toFixed(0)}m away, inside sightRange ${info.sight} — it could have seen the player instead of hearing the shot`;
+    }
+    const asleep = info.woken.filter((w) => !w).length;
+    return asleep === 0 ? null : `${asleep} of ${info.woken.length} men slept through a gunshot ${info.distances[0].toFixed(0)}m away (hearingRange ${info.hearing})`;
+  }],
+
+  ['a camp closes, shoots, and puts the player down in a few seconds in the open', async () => {
+    // BUILD-PLAN.md: "bandits miss often enough that standing in the open is
+    // survivable for a few seconds but stupid." Driven from inside at a fixed
+    // step, because headless renders at ~3fps and dt is clamped — sixteen real
+    // seconds is under three seconds of simulation (docs/TESTING.md).
+    const info = await page.evaluate(async () => {
+      const { HEALTH } = await import('/src/config-ai.js');
+      const d = window.__debug;
+      const camp = d.bandits.camps.find((c) => c.alive >= 3);
+      const savedPlayer = d.player.position.clone();
+      d.player.health.reset();
+      d.player.dead = false;
+      d.player.character.setDead(false);
+      d.player.position.set(camp.x + 20, 0, camp.z + 20);
+      d.player.position.y = d.player.world.groundHeightAt(d.player.position.x, d.player.position.z);
+      for (const b of d.bandits.bandits) { b.ai.alerted = false; b.ai.memory = 0; b.ammo = 999; b._losT = 0; }
+
+      const seen = new Set();
+      let firstHit = -1;
+      let killed = -1;
+      const step = 1 / 60;
+      for (let i = 0; i < 60 * 30 && killed < 0; i++) {
+        d.bandits.update(step, d.player);
+        for (const b of d.bandits.bandits) if (b.camp === camp) seen.add(b.ai.state);
+        if (firstHit < 0 && d.player.health.current < HEALTH.playerMax) firstHit = i * step;
+        if (d.player.dead) killed = i * step;
+      }
+      d.player.dead = false;
+      d.player.health.reset();
+      d.player.character.setDead(false);
+      d.player.position.copy(savedPlayer);
+      for (const b of d.bandits.bandits) { b.ammo = 6; b.ai.alerted = false; b.ai.memory = 0; }
+      return { states: [...seen], firstHit, killed };
+    });
+    if (!info.states.includes('shoot')) return `the camp never reached the shoot state (saw: ${info.states.join(', ')})`;
+    if (info.firstHit < 0) return 'thirty seconds of a camp firing and not one round landed';
+    if (info.killed < 0) return 'the player survived thirty seconds standing in the open — bandits are not lethal enough';
+    if (info.killed < 2) return `the player died in ${info.killed.toFixed(1)}s — "survivable for a few seconds" is not survivable`;
+    console.log(`  (info) standing in the open at a camp: first hit ${info.firstHit.toFixed(1)}s, dead ${info.killed.toFixed(1)}s; states ${info.states.join(', ')}`);
+    return info.killed <= 20 ? null : `it took ${info.killed.toFixed(1)}s to die in the open — that is a health sponge, not a western`;
+  }],
+
+  ['five hits drop the player, and respawn puts them back whole', async () => {
+    const info = await page.evaluate(async () => {
+      const { HEALTH } = await import('/src/config-ai.js');
+      const d = window.__debug;
+      const saved = d.player.position.clone();
+      d.player.health.reset();
+      d.player.dead = false;
+      d.player.character.setDead(false);
+      const outcomes = [];
+      for (let i = 0; i < HEALTH.playerMax + 1; i++) outcomes.push(d.player.damage(HEALTH.banditDamage));
+      const died = { dead: d.player.dead, hp: d.player.health.current, flash: d.player.damageFlash, canFire: d.combat.canFire, canReload: d.combat.canReload };
+      d.player.respawn();
+      const back = { dead: d.player.dead, hp: d.player.health.current, canFire: d.combat.canFire };
+      d.player.position.copy(saved);
+      return { outcomes, died, back, max: HEALTH.playerMax };
+    });
+    const expected = [...Array(info.max - 1).fill('hit'), 'dead', null];
+    if (JSON.stringify(info.outcomes) !== JSON.stringify(expected)) {
+      return `damage outcomes were ${JSON.stringify(info.outcomes)}, expected ${JSON.stringify(expected)}`;
+    }
+    if (!(info.died.flash > 0)) return 'no damage flash was raised on the killing hit';
+    if (info.died.canFire || info.died.canReload) return 'a dead player can still fire or reload';
+    if (info.back.dead || info.back.hp !== info.max) return `respawn left the player dead=${info.back.dead} on ${info.back.hp} hit points`;
+    if (!info.back.canFire) return 'a respawned player cannot fire';
+    return null;
+  }],
+
+  ['respawn picks the nearer of spawn and the last camp, and stands off from it', async () => {
+    // BUILD-PLAN.md: "respawn at the config spawn point, or at the last bandit
+    // camp you approached, whichever is nearer." Taken literally that drops the
+    // player inside the camp that just killed them, so it is a stand-off ring —
+    // and the check asserts BOTH halves, since a stand-off that is not near the
+    // camp is just the spawn point with extra steps.
+    const info = await page.evaluate(async () => {
+      const { BANDIT } = await import('/src/config-ai.js');
+      const { SPAWN } = await import('/src/config.js');
+      const d = window.__debug;
+      const camp = d.bandits.camps[0];
+      const saved = d.player.position.clone();
+      const savedCamp = d.player._lastCamp;
+
+      // Never been near a camp: the spawn point, whatever else is true.
+      d.player._lastCamp = null;
+      d.player.position.set(camp.x, 0, camp.z);
+      d.player.respawn();
+      const noCamp = { x: d.player.position.x, z: d.player.position.z };
+
+      // Approached the camp and died out there: the camp wins.
+      d.player.position.set(camp.x + 5, 0, camp.z + 5);
+      d.player.markCamp(camp);
+      d.player.respawn();
+      const atCamp = { x: d.player.position.x, z: d.player.position.z };
+
+      // ...but died back at the spawn point: the spawn point wins again.
+      d.player.position.set(SPAWN.x + 3, 0, SPAWN.z + 3);
+      d.player.respawn();
+      const nearSpawn = { x: d.player.position.x, z: d.player.position.z };
+
+      d.player._lastCamp = savedCamp;
+      d.player.position.copy(saved);
+      return {
+        noCamp, atCamp, nearSpawn,
+        camp: { x: camp.x, z: camp.z },
+        spawn: { x: SPAWN.x, z: SPAWN.z },
+        standoff: BANDIT.respawnStandoff,
+        approach: BANDIT.campApproachRadius,
+      };
+    });
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+    if (dist(info.noCamp, info.spawn) > 0.01) return 'with no camp visited, respawn did not use SPAWN';
+    if (dist(info.nearSpawn, info.spawn) > 0.01) return 'dying at the spawn point respawned somewhere else';
+    const out = dist(info.atCamp, info.camp);
+    if (Math.abs(out - info.standoff) > 0.5) return `respawn landed ${out.toFixed(1)}m from the camp, expected the ${info.standoff}m stand-off`;
+    if (out > info.approach) return `the stand-off (${out.toFixed(0)}m) is outside campApproachRadius (${info.approach}m) — respawning there un-arms the checkpoint`;
+    return null;
+  }],
+
+  ['bandit colliders are registered once and mutate in place, never re-added', async () => {
+    // The moving-collider half of the collision contract. The horse has had
+    // this check since round 2; eleven more moving colliders is eleven more
+    // chances to get it wrong.
+    const info = await page.evaluate(async () => {
+      const { colliders } = await import('/src/collision.js');
+      const d = window.__debug;
+      // FULLY staged, because two things silently make this check measure
+      // nothing: bandits outside BANDIT.activeRadius are not ticked at all,
+      // and a bandit already standing on the player's position has nowhere to
+      // chase to. Both produced a "no collider moved" failure before the men
+      // were put back at their camp and the player pushed out to 50m.
+      const camp = d.bandits.camps.find((c) => c.alive >= 2);
+      const savedPlayer = d.player.position.clone();
+      const live = d.bandits.bandits.filter((b) => b.alive && b.camp === camp);
+      const savedPos = live.map((b) => b.position.clone());
+      live.forEach((b, i) => {
+        const a = (i / live.length) * Math.PI * 2;
+        b.position.set(camp.x + Math.cos(a) * camp.radius, 0, camp.z + Math.sin(a) * camp.radius);
+        b.position.y = d.player.world.groundHeightAt(b.position.x, b.position.z);
+        b.collider.x = b.position.x;
+        b.collider.z = b.position.z;
+        b.velocityXZ.set(0, 0, 0);
+      });
+      d.player.position.set(camp.x + 50, 0, camp.z);
+      d.player.position.y = d.player.world.groundHeightAt(d.player.position.x, d.player.position.z);
+      for (const b of live) b.ai.alert(d.player.position.x, d.player.position.z); // 50m to close: they must move
+      const before = colliders.length;
+      const refs = live.map((b) => b.collider);
+      const startX = live.map((b) => b.collider.x);
+      for (let i = 0; i < 240; i++) d.bandits.update(1 / 60, d.player);
+      const out = {
+        before,
+        after: colliders.length,
+        sameRefs: live.every((b, i) => b.collider === refs[i]),
+        duplicates: refs.filter((c) => colliders.filter((x) => x === c).length !== 1).length,
+        tracking: live.every((b) => Math.abs(b.collider.x - b.position.x) < 1e-6 && Math.abs(b.collider.z - b.position.z) < 1e-6),
+        moved: live.some((b, i) => Math.abs(b.collider.x - startX[i]) > 0.01),
+      };
+      live.forEach((b, i) => {
+        b.ai.alerted = false;
+        b.ai.memory = 0;
+        b.position.copy(savedPos[i]);
+        if (b.collider) { b.collider.x = b.position.x; b.collider.z = b.position.z; }
+        b.ai.anchor.copy(b.position);
+      });
+      d.player.position.copy(savedPlayer);
+      return out;
+    });
+    if (info.after !== info.before) return `the collider list went ${info.before} -> ${info.after} over four seconds — something is re-adding`;
+    if (!info.sameRefs) return 'a bandit swapped its collider object mid-run';
+    if (info.duplicates) return `${info.duplicates} bandit colliders appear more or less than once in the array`;
+    if (!info.tracking) return 'a bandit collider is not following its body';
+    if (!info.moved) return 'no bandit collider moved at all in four seconds — the check proved nothing';
+    return null;
+  }],
+
+  ['draw calls stay inside budget with a whole camp on screen', async () => {
+    // Round 4 is the first round that adds a lot of skinned geometry, and it
+    // nearly blew the budget: four bandits, the player and the horse in frame
+    // measured 126 calls before the revolver's seven parts were merged into one
+    // mesh per material (weapons.js). The existing budget check samples at
+    // spawn, where no bandit is visible, so it would never have noticed.
+    const camp = await page.evaluate(() => {
+      const d = window.__debug;
+      const c = d.bandits.camps[0];
+      d.player.position.set(c.x + 18, 0, c.z + 18);
+      d.player.position.y = d.player.world.groundHeightAt(d.player.position.x, d.player.position.z);
+      d.tpCamera.yaw = Math.atan2(-(c.x - d.player.position.x), -(c.z - d.player.position.z));
+      d.tpCamera.pitch = 0.12;
+      d.horse.position.set(d.player.position.x + 3, d.player.position.y, d.player.position.z);
+      return c.name;
+    });
+    const start = await page.evaluate(() => window.__frames);
+    await page.waitForFunction((n) => window.__frames > n + 6, start, { timeout: 30000 });
+    const info = await page.evaluate(() => ({
+      calls: window.__debug.drawCalls,
+      triangles: window.__debug.renderer.info.render.triangles,
+      alive: window.__debug.banditsAlive,
+    }));
+    if (typeof info.calls !== 'number') return 'window.__debug.drawCalls is missing';
+    console.log(`  (info) at ${camp}: ${info.calls} draw calls, ${info.triangles.toLocaleString()} triangles, ${info.alive} bandits alive`);
+    return info.calls <= 120 ? null : `${info.calls} draw calls with a camp on screen, budget is ~120`;
   }],
 
   ['shot spread is a real cone, and riding widens it', async () => {

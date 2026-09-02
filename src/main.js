@@ -19,6 +19,7 @@ import { buildTargets } from './targets.js';
 import { Vfx } from './vfx.js';
 import { createAudio } from './audio.js';
 import { Combat } from './combat.js';
+import { buildBandits } from './bandits.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, RENDER.maxPixelRatio));
@@ -102,8 +103,16 @@ async function init() {
   const audio = await createAudio(camera, scene);
   window.__debug.audioMissing = audio.missing;
 
+  ui.setLoadingText('rousing the bandits…');
+  // Never rejects: a missing bandit.glb is one warning and eleven capsule
+  // placeholders, not a failed boot. Built BEFORE Combat, which copies its
+  // ray-ignore set — see combat.js and bandits.js.
+  const bandits = await buildBandits({ scene, world, vfx, audio, targets, horse });
+  window.__debug.banditCounts = bandits.counts;
+  window.__debug.bandits = bandits; // debug hook, not read by gameplay code
+
   const combat = new Combat({
-    player, horse, camera, tpCamera, world, targets, vfx, audio,
+    player, horse, camera, tpCamera, world, targets, bandits, vfx, audio,
     weapon: character.weapon,
   });
   window.__debug.combat = combat; // debug hook, not read by gameplay code
@@ -132,6 +141,11 @@ async function init() {
     // the rider is aiming before it decides how to steer.
     combat.pollInput(dt);
 
+    // A dead rider does not stay in the saddle. handleMountToggle is the
+    // sanctioned public entry point (ADR-011) and it refuses mid-air, so this
+    // simply retries next frame if the horse is over a jump.
+    if (player.dead && player.mounted) horse.handleMountToggle(player);
+
     // horse.js reads H (whistle) and E (mount/dismount) itself, and drives
     // player.mounted via player.mount()/dismount() — see horse.js's header.
     // `aiming` is passed in rather than reached for: horse.js has no combat
@@ -154,11 +168,20 @@ async function init() {
     // pollInput() would aim every shot from last frame's hand position.
     combat.update(dt);
 
+    // After combat, so the player's round resolves before the return fire. The
+    // bandits' own rigs are posed inside this call and each fires from its own
+    // muzzle immediately after being posed, which is the same rule step 6
+    // obeys for the player.
+    bandits.update(dt, player);
+
     tpCamera.setMounted(player.mounted);
     tpCamera.setAiming(combat.aimWeight);
     ui.setMounted(player.mounted);
     ui.setAiming(combat.aimWeight);
     ui.updateAmmo(combat.ammo, combat.reloading);
+    ui.updateHealth(player.health.current);
+    ui.updateDamageFlash(player.damageFlash);
+    ui.setDead(player.dead);
     // While mounted, ignore the horse's own collider in the camera's
     // occlusion sweep — the rider's pivot sits right on/inside it, which
     // otherwise collapses the camera to CAMERA.minDistance every frame.
@@ -189,6 +212,14 @@ async function init() {
     window.__debug.reloading = combat.reloading;
     window.__debug.shotsFired = combat.shotsFired;
     window.__debug.targetsAlive = targets.aliveCount;
+    window.__debug.playerHealth = player.health.current;
+    window.__debug.playerDead = player.dead;
+    window.__debug.banditsAlive = bandits.aliveCount;
+    window.__debug.banditStates = bandits.states;
+    // BUILD-PLAN.md's ~120 draw-call budget, readable without wiring it up
+    // again. Round 4 is the first round that adds a lot of skinned meshes, so
+    // this is now a number worth watching rather than a debug curiosity.
+    window.__debug.drawCalls = renderer.info.render.calls;
   });
 }
 

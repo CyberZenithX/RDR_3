@@ -21,6 +21,7 @@ open a file, and points at `docs/` for everything else.
 | `scripts/smoke.mjs`, verification, screenshots | [`docs/TESTING.md`](docs/TESTING.md) |
 | why something odd-looking is the way it is | [`docs/DECISIONS.md`](docs/DECISIONS.md) |
 | guns, aiming, the shot, targets, effects, audio | [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-023..026, then [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)'s Combat section |
+| bandits, camps, health, dying, respawn | [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-027..030, then [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)'s Bandits section |
 | a bug that smells familiar | [`docs/DEVELOPMENT-NOTES.md`](docs/DEVELOPMENT-NOTES.md) |
 | models, licences, scaling, what can't be fetched | [`docs/ASSETS.md`](docs/ASSETS.md) |
 | what the round you're starting must watch out for | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
@@ -39,18 +40,17 @@ open a file, and points at `docs/` for everything else.
 | 2c — rider stays seated through a turn | **done** | |
 | 2d — horse jump (Space, while mounted) | **done** | |
 | 3 — guns | **done** | `round-3` |
-| 4 — bandits | not started | |
+| 4 — bandits | **done** | `round-4` |
 | 5 — town | not started | |
 | 6 — bounties, duels, wanted | not started | |
 | 7 — polish | not started | |
 
-**Next round: 4 — bandits.** Read [`docs/ROADMAP.md`](docs/ROADMAP.md) before
-you start. Most of what a bandit needs was built generically in round 3 and is
-waiting to be reused — the revolver attaches to any skeleton, `combat-ray.js`
-is the line-of-sight query, the effects and audio are global pools. The three
-things that are genuinely new: **nothing in the game has health yet**,
-`Combat` currently assumes a player and a camera, and colliders can now be
-*removed* at runtime.
+**Next round: 5 — town.** Read [`docs/ROADMAP.md`](docs/ROADMAP.md) before you
+start. `resolveBox` finally gets its first caller; the plateau has been
+reserved since round 1 and `TOWN.halfSize` is the limit. Two things round 4
+leaves for it: the draw-call budget is now **genuinely tight** (106 of ~120
+with one camp on screen), and `config.js` is at 389 of the 400-line cap, so
+town tunables want a `config-town.js` from the start.
 
 ---
 
@@ -66,6 +66,7 @@ One line per file. Long form in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `src/config.js` | Every tunable except the horse's. |
 | `src/config-horse.js` | Every horse tunable: `HORSE`, `HORSE_ANIM`, `RIDING_POSE`, `TACK`, `PLACEHOLDER_HORSE`, clip candidates — **plus** the mounted/airborne accuracy penalties and the aiming steer rates. |
 | `src/config-combat.js` | Every gun tunable: `GUN`, `COMBAT`, `AIM_POSE`, `VFX`, `TARGETS`, `AUDIO`. |
+| `src/config-ai.js` | Every bandit tunable: `BANDIT`, `CAMPS`, `CAMP_PROPS` — **plus `HEALTH`**, the whole game's lethality model (ADR-027). |
 | `src/noise.js` | Seeded PRNG + simplex + fbm + smoothstep. No internal deps. |
 | `src/terrain.js` | `heightAt` / `normalAt` / `buildTerrain` / `groundHeightAt`. |
 | `src/sky.js` | Sky dome shader, sun + hemisphere light, fog, shadow follow. |
@@ -74,13 +75,18 @@ One line per file. Long form in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `src/world.js` | Orchestrator only, ~35 lines. |
 | `src/collision.js` | The one collider array + `resolveCollisions(pos, radius, ignore, clearY)`. |
 | `src/assets.js` | `loadGLTF`, `findClip`, `measureHeight`, `enableShadows`. |
-| `src/character.js` | `createPlayerCharacter()` — `player.glb` + locomotion + the riding pose. |
+| `src/rig-clone.js` | Skinned deep-copy. `Object3D.clone()` shares a `SkinnedMesh`'s skeleton; this rebinds it. Stands in for `SkeletonUtils`, which cannot be fetched (ADR-029). |
+| `src/health.js` | `Health` — max/current/`damage()`/`reset()`, and nothing else. Player, bandits, round 6's deputies. |
+| `src/character.js` | `createPlayerCharacter()` / `createRigFromGLTF()` — the humanoid rig for **both** the player and bandits: locomotion, riding pose, aim pose, plus the `hit`/`death` one-shots. |
 | `src/horse-character.js` | `createHorseCharacter()` — `horse.glb` + locomotion + the one-shot jump clip. |
 | `src/placeholder-human.js` | Procedural fallback rig for the player. |
 | `src/placeholder-horse.js` | Procedural fallback rig for the horse. |
-| `src/player.js` | Movement, jump, gravity, grounding, collision, locomotion state — plus the mounted branch. |
+| `src/player.js` | Movement, jump, gravity, grounding, collision, locomotion state, the mounted branch — plus health, dying, and **`respawn()`, the one function** round 7 swaps for a real checkpoint. |
 | `src/horse.js` | Everything **horizontal**: steering (normal *and* aiming), lean, stamina, collider, mount toggle. |
 | `src/horse-ai.js` | The unmounted wander/follow/whistle brain. Decides a heading and a speed; `horse.js` integrates them. |
+| `src/bandits.js` | The camps: one GLB load, a cloned rig per man, campfires, the shared ray-ignore set, the activation radius, `raycast()` / `hit()` / `hearShot()`. |
+| `src/bandit.js` | One bandit's body: position, collider, health, rig, and its own small firing path (**not** `combat.js` — ADR-028). |
+| `src/bandit-ai.js` | The brain: `patrol → alert → chase → takeCover → shoot → flee → dead`, three-ray avoidance, the stuck detector. Owns no position. |
 | `src/horse-jump.js` | Everything **vertical**: the arc, the pitch, `clearance()`. |
 | `src/horse-seat.js` | Where the rider sits: spine sampling (`bob`/`sway`/`drift`), the banked seat point. |
 | `src/riding-pose.js` | The hand-authored seated pose, bone by bone. Also the finger-grip axes. |
@@ -175,6 +181,33 @@ Read [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-023 through ADR-026.
   (ADR-025), the same reasoning as ADR-001/ADR-002. No mesh raycasts.
 - Mounted/airborne accuracy penalties live in `config-horse.js`, not
   `config-combat.js` — they are properties of the horse, not the gun.
+
+## Before modifying bandits, health or respawn
+
+Read [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-027 through ADR-030.
+
+- **A bandit does not use `combat.js`** (ADR-028). It has its own ~40-line
+  firing path over the same `weapons.js` / `combat-ray.js` / `vfx.js` /
+  `audio.js`. `Combat` is the *player's* gun: it resolves its aim point
+  through `tpCamera` and drives the crosshair, the shake and the ammo pips.
+- **Neither side is hit through the collider list.** A bandit's movement
+  collider is `top: Infinity` by the collision contract, so a shot ten metres
+  over its head would "hit" it; the player registers no collider at all, and
+  the horse's would swallow every round aimed at a mounted rider. Both are
+  tested as explicit foot-to-head cylinders — `bandits.raycast()` and
+  `bandit.js`'s player test — and every bandit collider plus the horse's is in
+  `bandits.rayIgnore`, which `combat.js` folds into its own ignore Set.
+- **`player.respawn()` is the one function.** Nothing else decides where the
+  player comes back; `bandits.js` only calls `player.markCamp()`.
+- **`bandit.glb` is loaded once and cloned** (`rig-clone.js`, ADR-029).
+  Materials and geometry are shared by reference on purpose — so **nothing may
+  recolour a bandit's material in place**, or all eleven flash at once. That
+  is why the hit reaction is the `HitRecieve` clip.
+- **`setLocomotion` is ignored while a flinch or a death owns the rig.** The
+  guard lives in `character.js`, so callers stay dumb; `playHit()` returns the
+  flinch's own duration and the caller uses that as the stagger.
+- Bandits beyond `BANDIT.activeRadius` (160) are **not ticked at all** — brain
+  and rig both. They stay rendered, frozen mid-idle.
 
 ## Before modifying collision, or making something jumpable
 
@@ -298,6 +331,32 @@ These are still open:
 - **A collider circle is not a silhouette.** A shot can clip the edge of a
   rock's collider without visually touching the rock — the same approximation
   the player already walks into, now visible as a spark in mid-air.
+
+- **Nobody has fought a bandit in real play.** Round 4's whole feel — how fast
+  a camp wakes, whether the cover shuffle reads as cover or as milling about,
+  whether the flinch is visible, whether being killed in ~8 seconds standing
+  in the open is right, how strong the damage vignette should be — was set
+  from measurements and three static screenshots. Levers are tabulated in
+  `config-ai.js`. What *was* seen: bandits stand and animate rather than
+  T-posing, the revolver is in each man's fist, the campfire reads, the tracer
+  and the HUD show.
+- **The draw-call budget is now genuinely tight.** 45 at spawn, **106** with
+  one camp, the horse and the player on screen, against BUILD-PLAN.md's ~120.
+  Merging the revolver's seven parts into one mesh per material took 20 off
+  that. Round 5's buildings and round 7's performance pass both have to live
+  inside what is left; the camp figure is now a smoke check.
+- **The bandit AI is deliberately dumb in tight spaces** — BUILD-PLAN.md says
+  so in as many words. Three forward rays and a sidestep timer, no navmesh.
+- **A dead bandit's body stays forever**, and its Death clip keeps being
+  mixer-updated while the player is within `BANDIT.activeRadius`. No cleanup
+  pass; round 7 can add one if bodies pile up.
+- **Bandits cannot hurt the horse and cannot be ridden down.** Their shots
+  ignore its collider outright (see above) and nothing tests the horse's own
+  health, because it has none.
+- **A bandit fires from the barrel but its aim is a straight line to the
+  player's chest**, with no lead and no allowance for the player moving —
+  which at a gallop means a mounted player is much harder to hit than the
+  spread numbers suggest. Untested by a human.
 
 - **Nobody has ridden the horse.** Every feel-related number — AI wander,
   lean-into-turns sign and magnitude, stamina pacing, riding-pose bob and

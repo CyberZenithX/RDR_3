@@ -1,7 +1,12 @@
 /**
- * player.js — movement, grounding, collision, and the locomotion animation
- * state machine. Owns the player's THREE.Vector3 position; main.js reads it
- * for the camera and HUD.
+ * player.js — movement, grounding, collision, the locomotion animation state
+ * machine, and (since round 4) health, dying and coming back. Owns the
+ * player's THREE.Vector3 position; main.js reads it for the camera and HUD.
+ *
+ * `respawn()` IS THE ONE FUNCTION. BUILD-PLAN.md: "Keep the respawn call in
+ * one function so round 7 can swap in the real checkpoint without touching
+ * combat code." Nothing else in the codebase decides where the player goes
+ * back to — bandits.js only calls `markCamp()` to say which camp is nearest.
  *
  * No vectors are allocated inside update() — everything reusable is a
  * module-level/instance scratch object, per the performance budget rule.
@@ -9,8 +14,10 @@
 
 import * as THREE from 'three';
 import { PLAYER, ANIM, TOWN, BOUNDARY, SPAWN } from './config.js';
+import { BANDIT, HEALTH } from './config-ai.js';
 import { isKeyDown, isPointerLocked } from './input.js';
 import { resolveCollisions } from './collision.js';
+import { Health } from './health.js';
 
 // Reused every mounted frame — nothing here allocates. See setSaddle().
 const _rideEuler = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -54,6 +61,11 @@ export class Player {
     this.animState = 'idle';
     this.boundaryProximity = 0; // 0..1, for the UI edge-of-map fade
     this.mounted = false; // true while riding the horse — see mount()/dismount() and horse.js
+    this.health = new Health(HEALTH.playerMax);
+    this.dead = false;
+    this.deathTimer = 0;
+    this.damageFlash = 0; // 0..1, drives the red vignette; ui.js reads it
+    this._lastCamp = null; // the last bandit camp approached — see markCamp()
     // Ride state, written by setSaddle() each mounted frame (see horse.js's
     // getSaddleTransform) and read by update()'s mounted branch.
     this.rideBlend = 0;
@@ -149,8 +161,32 @@ export class Player {
    *   state handed straight through to the rig — see combat.js's poseState().
    */
   update(dt, camera, combat = null) {
-    const aiming = !!combat?.aiming;
-    if (combat) this.character.setAimPose(combat.poseState());
+    const aiming = !!combat?.aiming && !this.dead;
+    if (combat && !this.dead) this.character.setAimPose(combat.poseState());
+    if (this.damageFlash > 0) {
+      this.damageFlash = Math.max(0, this.damageFlash - dt / HEALTH.damageFlashTime);
+    }
+
+    if (this.dead) {
+      // Everything stops except gravity and the death clip. main.js has already
+      // asked the horse to put the body down, so this only runs on foot.
+      this.speed = 0;
+      this.velocityXZ.set(0, 0, 0);
+      this.velocityY += PLAYER.gravity * dt;
+      this.position.y += this.velocityY * dt;
+      const deadGroundY = this.world.groundHeightAt(this.position.x, this.position.z);
+      if (this.position.y <= deadGroundY) {
+        this.position.y = deadGroundY;
+        this.velocityY = 0;
+        this.grounded = true;
+      }
+      this.character.update(dt);
+      this.character.root.position.copy(this.position);
+      this.character.root.rotation.set(0, this.meshYaw + PLAYER.meshYawOffset, 0);
+      this.deathTimer -= dt;
+      if (this.deathTimer <= 0) this.respawn();
+      return;
+    }
 
     if (this.mounted) {
       // Position/meshYaw are already set by main.js from horse.getSaddleTransform()
@@ -285,12 +321,73 @@ export class Player {
     this.character.root.rotation.y = this.meshYaw + PLAYER.meshYawOffset;
   }
 
+  /**
+   * Takes a hit. Returns 'dead' | 'hit' | null, the same three-way answer
+   * bandits get, so a caller can pick an effect without tracking state.
+   * BUILD-PLAN.md's feel target is five of these.
+   */
+  damage(amount = HEALTH.banditDamage) {
+    if (this.dead) return null;
+    const outcome = this.health.damage(amount);
+    if (!outcome) return null;
+    this.damageFlash = 1;
+    if (outcome === 'dead') {
+      this.dead = true;
+      this.deathTimer = HEALTH.respawnDelay;
+      this.velocityXZ.set(0, 0, 0);
+      this.character.setAimPose({ weight: 0 });
+      this.character.setRidingPose(0, 0, 0);
+      this.character.setDead(true);
+    } else {
+      this.character.playHit();
+    }
+    return outcome;
+  }
+
+  /**
+   * "You have been to this camp." Called by bandits.js whenever the player is
+   * within `BANDIT.campApproachRadius` of one. Stored, not acted on — the
+   * decision of where to reappear belongs to `respawn()` alone.
+   */
+  markCamp(camp) {
+    this._lastCamp = camp;
+  }
+
+  /**
+   * THE respawn — spawn point or last camp approached, whichever is nearer to
+   * where you died. "At the camp" is a stand-off ring `BANDIT.respawnStandoff`
+   * out on the town side: taken literally it drops you among the men who just
+   * killed you. Round 7 replaces this function's body with a localStorage
+   * checkpoint and nothing else has to change.
+   */
   respawn() {
-    this.position.set(SPAWN.x, 0, SPAWN.z);
+    let x = SPAWN.x;
+    let z = SPAWN.z;
+    let yaw = SPAWN.yaw;
+    const camp = this._lastCamp;
+    if (camp) {
+      const toSpawn = Math.hypot(this.position.x - SPAWN.x, this.position.z - SPAWN.z);
+      const toCamp = Math.hypot(this.position.x - camp.x, this.position.z - camp.z);
+      if (toCamp < toSpawn) {
+        // Stand off toward the town, which is also the way home.
+        const dx = TOWN.centerX - camp.x;
+        const dz = TOWN.centerZ - camp.z;
+        const len = Math.max(1e-3, Math.hypot(dx, dz));
+        x = camp.x + (dx / len) * BANDIT.respawnStandoff;
+        z = camp.z + (dz / len) * BANDIT.respawnStandoff;
+        yaw = Math.atan2(-(camp.x - x), -(camp.z - z)); // facing the camp
+      }
+    }
+    this.position.set(x, 0, z);
     this.position.y = this.world.groundHeightAt(this.position.x, this.position.z);
     this.velocityXZ.set(0, 0, 0);
     this.velocityY = 0;
     this.grounded = true;
-    this.meshYaw = SPAWN.yaw;
+    this.meshYaw = yaw;
+    this.health.reset();
+    this.dead = false;
+    this.deathTimer = 0;
+    this.damageFlash = 0;
+    this.character.setDead(false);
   }
 }

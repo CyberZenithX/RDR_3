@@ -122,6 +122,15 @@ export function raycastColliders(origin, dir, maxDist, ignore, out) {
   for (const col of colliders) {
     if (ignore && ignore.has(col)) continue;
     if (col.type !== 'circle') continue; // boxes arrive with round 5's buildings
+    // Broad phase: nothing further away than the ray is long can be crossed by
+    // it. Five flops, and it is what makes round 4's SHORT rays cheap — every
+    // bandit casts three 3.4m avoidance rays and a line-of-sight ray every
+    // frame against a list of ~600 colliders, and this rejects almost all of
+    // them before the quadratic. A 220m shot is unaffected, as it should be.
+    const bx = col.x - origin.x;
+    const bz = col.z - origin.z;
+    const reach = maxDist + col.r;
+    if (bx * bx + bz * bz > reach * reach) continue;
     if (raycastCylinder(origin, dir, maxDist, col.x, col.z, -Infinity, col.top, col.r, out)) {
       out.collider = col;
       out.kind = col.meta?.kind ?? 'prop';

@@ -1,13 +1,28 @@
 /**
- * character.js — the player's visual rig: loads player.glb, rescales it to
- * PLAYER.modelHeight, and wraps its idle/walk/run clips behind a small
- * uniform interface (`root`, `height`, `setLocomotion(state, speed)`,
- * `setAirborne(bool)`, `update(dt)`). Falls back to the procedural
+ * character.js — the humanoid visual rig: loads a GLB, rescales it to a
+ * requested height, and wraps its clips behind a small uniform interface
+ * (`root`, `height`, `setLocomotion(state, speed, aiming)`,
+ * `setAirborne(bool)`, `setRidingPose(...)`, `setAimPose(...)`, `playHit()`,
+ * `setDead(bool)`, `update(dt)`). Falls back to the procedural
  * PlaceholderHuman (same interface) if the GLB is missing or fails to load —
  * the game must stay playable either way.
  *
- * player.js owns *which* logical state ('idle' | 'walk' | 'run') to request
+ * NOT PLAYER-ONLY SINCE ROUND 4. `bandit.glb` shares `player.glb`'s rig bone
+ * for bone and clip for clip (docs/ANIMATION.md), so one class serves both:
+ * `createPlayerCharacter()` loads and wraps the player's GLB,
+ * `createRigFromGLTF(gltf, spec)` wraps an already-loaded one — which is how
+ * bandits.js gives eleven bandits one download and one set of GPU buffers via
+ * rig-clone.js.
+ *
+ * The caller owns *which* logical state ('idle' | 'walk' | 'run') to request
  * each frame; this file only knows how to play that state once told.
+ *
+ * Two clips are one-shots rather than states: `HitRecieve` (misspelled in the
+ * asset — docs/ANIMATION.md) and `Death`. Both are real clips on this rig, so
+ * BUILD-PLAN.md's substitution table does not apply here; it does apply to
+ * PlaceholderHuman, which has no clips at all and tips the body over instead.
+ * While either owns the rig, `setLocomotion` stands aside — the caller does
+ * not have to know that, which is why the guard lives in here.
  *
  * There is no dedicated jump clip. A retargeted real "Jump" clip (baked from
  * a second CC0 GLB onto this rig's own skeleton — see git history around
@@ -29,6 +44,13 @@ import { createRevolver } from './weapons.js';
 import { PLAYER, ANIM, CLIP_REFERENCE_SPEED, CLIP_CANDIDATES } from './config.js';
 
 /**
+ * Clips played once and then handed back, rather than looped as a locomotion
+ * state. `death` clamps on its last frame (the body stays down); `hit` does
+ * not (the flinch releases back into whatever was playing).
+ */
+const ONE_SHOT = { death: true, hit: false };
+
+/**
  * What each logical clip degrades to when a model does not ship it, best
  * first. Round 3's gun clips must fall back to their *unarmed* equivalent,
  * not to walk — an aiming idle that plays the walk cycle is worse than one
@@ -45,11 +67,19 @@ const CLIP_FALLBACKS = {
 const _hipWorld = new THREE.Vector3();
 const _rootWorld = new THREE.Vector3();
 
-class PlayerCharacterRig {
-  constructor(gltf) {
+class CharacterRig {
+  /**
+   * @param {object} gltf a loaded GLTF, or any `{scene, animations}` — bandits
+   *   pass a `cloneRig()`ed scene alongside the ORIGINAL clip array, which is
+   *   safe because AnimationMixer binds tracks to nodes by name (rig-clone.js).
+   * @param {{height:number, label:string, path:string}} spec how tall to make
+   *   it and what to call it in warnings.
+   */
+  constructor(gltf, spec) {
+    this.spec = spec;
     this.root = gltf.scene;
     const measured = measureHeight(this.root);
-    this.root.scale.setScalar(measured > 0 ? PLAYER.modelHeight / measured : 1);
+    this.root.scale.setScalar(measured > 0 ? spec.height / measured : 1);
     enableShadows(this.root);
 
     this.mixer = new THREE.AnimationMixer(this.root);
@@ -61,20 +91,24 @@ class PlayerCharacterRig {
         action.loop = THREE.LoopRepeat;
         this.actions[key] = action;
       } else {
-        console.warn(`[character] no "${key}" clip found on ${PLAYER.modelPath} (tried: ${candidates.join(', ')})`);
+        console.warn(`[character] no "${key}" clip found on ${spec.path} (tried: ${candidates.join(', ')})`);
       }
     }
     if (!this.actions.idle && !this.actions.walk) {
       // Per BUILD-PLAN.md: Walk/Run cannot be faked. Surfacing this as a thrown
       // error lets createPlayerCharacter() below catch it and fall back to the
       // placeholder rather than shipping a character that can never animate.
-      throw new Error(`${PLAYER.modelPath} has neither an idle nor a walk clip — cannot animate`);
+      throw new Error(`${spec.path} has neither an idle nor a walk clip — cannot animate`);
     }
 
     this.isPlaceholder = false;
-    this.height = PLAYER.modelHeight;
+    this.height = spec.height;
     this._active = null;
     this._activeName = null;
+    // Round 4: a flinch or a death owns the rig outright while it plays, and
+    // setLocomotion stands aside until `_oneShotT` runs out.
+    this._oneShotT = 0;
+    this._dead = false;
     this._activate(this.actions.idle ? 'idle' : 'walk');
 
     // Baseline captured before the mixer has ever run, so it is the GLB's own
@@ -107,7 +141,7 @@ class PlayerCharacterRig {
 
   _measureHipHeight() {
     const hip = this.root.getObjectByName('Body') ?? this.root.getObjectByName('Hips');
-    if (!hip) return PLAYER.modelHeight * 0.45; // sane fraction of stature if this rig names its pelvis something else
+    if (!hip) return this.spec.height * 0.45; // sane fraction of stature if this rig names its pelvis something else
     this.root.updateMatrixWorld(true);
     hip.getWorldPosition(_hipWorld);
     this.root.getWorldPosition(_rootWorld);
@@ -178,6 +212,11 @@ class PlayerCharacterRig {
    *   played slower rather than a second one that does not exist.
    */
   setLocomotion(state, speed, aiming = false) {
+    // A death or a flinch owns the whole body while it plays. The guard lives
+    // here rather than in every caller: player.js and bandit.js both drive
+    // locomotion unconditionally every frame, and neither should have to know
+    // that this rig is currently falling over.
+    if (this._dead || this._oneShotT > 0) return;
     const wanted = aiming ? (state === 'idle' ? 'idleGun' : 'runGun') : state;
     const target = this._resolveAvailable(wanted);
     if (target) this._activate(target);
@@ -191,7 +230,68 @@ class PlayerCharacterRig {
       : THREE.MathUtils.clamp(speed / ref, ANIM.minTimeScale, ANIM.maxTimeScale);
   }
 
+  /**
+   * Crossfades into a clip that plays once. `clamp` holds its last frame
+   * forever (a body stays down); without it the action releases and the next
+   * `setLocomotion` fades the gait back in.
+   *
+   * @returns {number} the clip's duration, or 0 if this rig does not ship it.
+   */
+  _playOneShot(name, clamp) {
+    const action = this.actions[name];
+    if (!action) return 0;
+    action.reset();
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = clamp;
+    action.timeScale = 1;
+    if (this._active && this._active !== action) this._active.fadeOut(ANIM.fadeTime);
+    action.fadeIn(ANIM.fadeTime).play();
+    this._active = action;
+    this._activeName = name;
+    return action.getClip().duration;
+  }
+
+  /**
+   * The hit reaction. `HitRecieve` is a real clip on this rig, so this is the
+   * clip rather than BUILD-PLAN.md's spine-flinch substitution — and it is
+   * deliberately NOT a material colour flash, because every bandit shares one
+   * material by reference (rig-clone.js) and they would all light up together.
+   *
+   * @returns {number} how long the flinch lasts, 0 if the rig has no such clip.
+   *   The caller uses this as the stagger, so the animation defines the beat.
+   */
+  playHit() {
+    if (this._dead) return 0;
+    const duration = this._playOneShot('hit', ONE_SHOT.hit);
+    // Hand the body back a fade early, so the gait is already blending in as
+    // the flinch ends rather than after a frame of nothing.
+    this._oneShotT = duration > 0 ? Math.max(0.05, duration - ANIM.fadeTime) : 0;
+    return this._oneShotT;
+  }
+
+  /**
+   * Dead or alive. Idempotent, and reversible — the player comes back
+   * (BUILD-PLAN.md's respawn), so this cannot be a one-way latch.
+   */
+  setDead(dead) {
+    if (dead === this._dead) return;
+    this._dead = dead;
+    this._oneShotT = 0;
+    if (dead) {
+      this._playOneShot('death', ONE_SHOT.death);
+      return;
+    }
+    // Back on your feet: the death action is clamped on its last frame, so it
+    // has to be stopped outright rather than faded, and `_active` cleared so
+    // `_activate` does not short-circuit on "already playing".
+    this.actions.death?.stop();
+    this._active = null;
+    this._activeName = null;
+    this._activate(this.actions.idle ? 'idle' : 'walk');
+  }
+
   update(dt) {
+    if (this._oneShotT > 0) this._oneShotT = Math.max(0, this._oneShotT - dt);
     this.mixer.update(dt);
     // Strictly after the mixer: the seated pose works by overwriting the bones
     // the still-playing idle clip just wrote. Called unconditionally, including
@@ -207,11 +307,21 @@ class PlayerCharacterRig {
   }
 }
 
+/**
+ * Wraps an ALREADY-LOADED gltf (or `{scene, animations}`) as a rig. Throws on
+ * a rig it cannot animate — the caller decides whether that means a
+ * placeholder or a hard failure. bandits.js is the other caller.
+ */
+export function createRigFromGLTF(gltf, spec) {
+  return new CharacterRig(gltf, spec);
+}
+
 /** Loads the player's GLB, or falls back to the procedural placeholder on any failure. */
 export async function createPlayerCharacter() {
+  const spec = { height: PLAYER.modelHeight, label: 'player', path: PLAYER.modelPath };
   try {
     const gltf = await loadGLTF(PLAYER.modelPath);
-    return new PlayerCharacterRig(gltf);
+    return createRigFromGLTF(gltf, spec);
   } catch (err) {
     console.warn(`[character] "${PLAYER.modelPath}" failed to load or animate — using capsule placeholder.`, err);
     return new PlaceholderHuman();

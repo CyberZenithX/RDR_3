@@ -14,12 +14,21 @@
  * where a hand would be, purely so weapons.js's generic bone search finds one
  * here too and the revolver is held rather than floating at the root. That is
  * the only concession this file makes to the real rig's naming.
+ *
+ * Round 4 note: this is the one rig BUILD-PLAN.md's substitution table for
+ * `Hit` and `Death` actually applies to — the real GLB ships both clips, this
+ * has no clips at all. So a hit rocks the body back and a death tips it onto
+ * its side over `HEALTH.tipTime` and settles it `HEALTH.sink` into the ground,
+ * exactly as the table describes. Both are applied to `hips`, NOT to `root`:
+ * player.js and bandit.js both rewrite `root.position`/`root.rotation.y` every
+ * frame, so anything written to the root is gone before it renders.
  */
 
 import * as THREE from 'three';
 import { PLACEHOLDER, COLORS, ANIM, PLAYER, JUMP } from './config.js';
 import { RIDING_POSE } from './config-horse.js';
 import { AIM_POSE } from './config-combat.js';
+import { HEALTH } from './config-ai.js';
 import { createRevolver } from './weapons.js';
 
 function buildSegment(radius, halfLength, material) {
@@ -98,6 +107,9 @@ export class PlaceholderHuman {
     this._aimElevation = 0;
     this._aimRecoil = 0;
     this._aimReload = 0;
+    this._dead = false;
+    this._deathT = 0; // 0..HEALTH.tipTime through the fall
+    this._hitT = 0;
     // Matches the real rig's own measured pelvis height, so horse.js's saddle
     // offset means the same thing whichever rig is in play.
     this.hipHeight = PLACEHOLDER.hipHeight;
@@ -154,6 +166,24 @@ export class PlaceholderHuman {
     this._aimElevation = elevation;
     this._aimRecoil = THREE.MathUtils.clamp(recoil, 0, 1);
     this._aimReload = THREE.MathUtils.clamp(reload, 0, 1);
+  }
+
+  /**
+   * The flinch. Returns how long it lasts, so the caller can use the same
+   * number as its stagger whichever rig is in play — the real one returns its
+   * clip's duration.
+   */
+  playHit() {
+    if (this._dead) return 0;
+    this._hitT = HEALTH.hitStagger;
+    return HEALTH.hitStagger;
+  }
+
+  /** Dead or alive. Reversible: the player respawns. */
+  setDead(dead) {
+    if (dead === this._dead) return;
+    this._dead = dead;
+    if (dead) this._hitT = 0;
   }
 
   update(dt) {
@@ -247,6 +277,27 @@ export class PlaceholderHuman {
         left.shoulder.rotation.z = lerp(left.shoulder.rotation.z, -AIM_POSE.supportArmIn, w);
         left.elbow.rotation.x = lerp(left.elbow.rotation.x, -AIM_POSE.supportElbowBend, w);
       }
+    }
+
+    // The flinch, and then the fall — last, over everything above, for the
+    // same reason aim comes after riding: whatever else the body is doing,
+    // being shot wins. Both are written to `hips`; see the file header.
+    if (this._hitT > 0 && !this._dead) {
+      this._hitT = Math.max(0, this._hitT - dt);
+      const k = Math.sin((this._hitT / HEALTH.hitStagger) * Math.PI);
+      this.hips.rotation.x -= HEALTH.flinchLean * k;
+    }
+    if (this._dead) this._deathT = Math.min(HEALTH.tipTime, this._deathT + dt);
+    else if (this._deathT > 0) this._deathT = Math.max(0, this._deathT - dt * 3);
+    if (this._deathT > 0) {
+      const t = this._deathT / HEALTH.tipTime;
+      const k = t * t * (3 - 2 * t); // smoothstep, so the body does not snap over
+      const lerp = THREE.MathUtils.lerp;
+      this.hips.rotation.z = k * Math.PI / 2;
+      this.hips.rotation.x = lerp(this.hips.rotation.x, 0, k);
+      // Tipped onto its side, the torso is horizontal, so the hips end up one
+      // torso-radius off the ground — and then a little further into it.
+      this.hips.position.y = lerp(this.hips.position.y, cfg.torsoRadius - HEALTH.sink, k);
     }
   }
 }

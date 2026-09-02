@@ -13,6 +13,15 @@
  * positioned at it each frame, so they follow the barrel through the aiming
  * pose, the recoil kick and the horse's bank without knowing about any of
  * them. That is the same empty the raycast starts from — see weapons.js.
+ *
+ * ROUND 4 ADDS A SECOND KIND OF SHOOTER, and it needs a different flash. The
+ * player's is parented to ONE muzzle and cannot be at a bandit's barrel as
+ * well, so `enemyFire()` uses a small ring of world-positioned flashes
+ * instead — correct enough for something that lives 55ms, and deliberately
+ * WITHOUT a point light: eleven bandits' worth of PointLights would push the
+ * scene's light count around and recompile shaders mid-firefight, for a glow
+ * nobody sees at forty metres. The tracer became a ring at the same time, so
+ * a camp firing at once does not have four bandits stealing one mesh.
  */
 
 import * as THREE from 'three';
@@ -130,20 +139,44 @@ export class Vfx {
     this.flash.visible = false;
     this._flashT = -1;
 
+    // ------------------------------------------------------ enemy flash ---
+    // Same two crossed quads, but unparented and moved to the shooter each
+    // time, and no point light. See the file header.
+    this.enemyFlashes = [];
+    for (let i = 0; i < VFX.enemyFlashCount; i++) {
+      const group = new THREE.Group();
+      for (const rot of [0, Math.PI / 2]) {
+        const plane = new THREE.Mesh(flashGeo, flashMat);
+        plane.rotation.z = rot;
+        group.add(plane);
+      }
+      group.visible = false;
+      group.frustumCulled = false;
+      scene.add(group);
+      this.enemyFlashes.push({ group, t: -1 });
+    }
+    this._nextEnemyFlash = 0;
+
     // ----------------------------------------------------------- tracer ---
-    // A unit-length cylinder along +Z, scaled to the shot each time. One is
-    // enough: the tracer outlives a shot by 0.06s and the gun cannot fire
-    // faster than COMBAT.fireInterval.
+    // A unit-length cylinder along +Z, scaled to the shot each time. A RING of
+    // them, not one: the player's gun cannot outrun COMBAT.fireInterval, but a
+    // camp of four bandits firing at once would otherwise hand one mesh back
+    // and forth and show a single tracer.
     const tracerGeo = new THREE.CylinderGeometry(VFX.tracerRadius, VFX.tracerRadius, 1, 5, 1, true);
     tracerGeo.rotateX(Math.PI / 2);
     tracerGeo.translate(0, 0, 0.5);
-    this.tracer = new THREE.Mesh(tracerGeo, new THREE.MeshBasicMaterial({
+    const tracerMat = new THREE.MeshBasicMaterial({
       color: VFX.tracerColor, transparent: true, opacity: 0.7, depthWrite: false, fog: false,
-    }));
-    this.tracer.visible = false;
-    this.tracer.frustumCulled = false;
-    scene.add(this.tracer);
-    this._tracerT = -1;
+    });
+    this.tracers = [];
+    for (let i = 0; i < VFX.tracerCount; i++) {
+      const mesh = new THREE.Mesh(tracerGeo, tracerMat.clone());
+      mesh.visible = false;
+      mesh.frustumCulled = false;
+      scene.add(mesh);
+      this.tracers.push({ mesh, t: -1 });
+    }
+    this._nextTracer = 0;
 
     // ----------------------------------------------------------- decals ---
     const decalGeo = new THREE.CircleGeometry(VFX.decalRadius, 8);
@@ -189,16 +222,36 @@ export class Vfx {
     this.flash.visible = true;
     this.flash.rotation.z = Math.random() * Math.PI; // no two flashes the same shape
     this.flashLight.intensity = VFX.flashLightIntensity;
+    this._tracer(from, to);
+  }
 
+  /**
+   * A bandit's shot. Same tracer, a world-positioned flash instead of the
+   * parented one — see the file header for why they are not the same object.
+   */
+  enemyFire(from, to) {
+    const slot = this.enemyFlashes[this._nextEnemyFlash];
+    this._nextEnemyFlash = (this._nextEnemyFlash + 1) % this.enemyFlashes.length;
+    slot.t = 0;
+    slot.group.position.copy(from);
+    slot.group.rotation.z = Math.random() * Math.PI;
+    slot.group.scale.setScalar(1);
+    slot.group.visible = true;
+    this._tracer(from, to);
+  }
+
+  _tracer(from, to) {
     _v.subVectors(to, from);
     const len = _v.length();
-    if (len > 1e-4) {
-      this.tracer.position.copy(from);
-      this.tracer.quaternion.setFromUnitVectors(_forward, _v.divideScalar(len));
-      this.tracer.scale.set(1, 1, len);
-      this.tracer.visible = true;
-      this._tracerT = 0;
-    }
+    if (len <= 1e-4) return;
+    const slot = this.tracers[this._nextTracer];
+    this._nextTracer = (this._nextTracer + 1) % this.tracers.length;
+    slot.mesh.position.copy(from);
+    slot.mesh.quaternion.setFromUnitVectors(_forward, _v.divideScalar(len));
+    slot.mesh.scale.set(1, 1, len);
+    slot.mesh.material.opacity = 0.7;
+    slot.mesh.visible = true;
+    slot.t = 0;
   }
 
   /** Impact: a spray of sparks and a decal lying on the surface that was hit. */
@@ -268,14 +321,26 @@ export class Vfx {
         this.flashLight.intensity = VFX.flashLightIntensity * k;
       }
     }
-    if (this._tracerT >= 0) {
-      this._tracerT += dt;
-      const k = 1 - this._tracerT / VFX.tracerDuration;
+    for (const slot of this.enemyFlashes) {
+      if (slot.t < 0) continue;
+      slot.t += dt;
+      const k = 1 - slot.t / VFX.flashDuration;
       if (k <= 0) {
-        this._tracerT = -1;
-        this.tracer.visible = false;
+        slot.t = -1;
+        slot.group.visible = false;
       } else {
-        this.tracer.material.opacity = 0.7 * k;
+        slot.group.scale.setScalar(0.6 + k * 0.7);
+      }
+    }
+    for (const slot of this.tracers) {
+      if (slot.t < 0) continue;
+      slot.t += dt;
+      const k = 1 - slot.t / VFX.tracerDuration;
+      if (k <= 0) {
+        slot.t = -1;
+        slot.mesh.visible = false;
+      } else {
+        slot.mesh.material.opacity = 0.7 * k;
       }
     }
     this.sparks.update(dt);

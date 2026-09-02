@@ -531,3 +531,120 @@ Items 25–27 of the round-3 list still stand. New things to listen for:
     shot, that line is the fix.
 32. **Nothing should distort at close range**, especially firing while
     mounted, where the muzzle is nearest the listener.
+
+### Between rounds 3 and 4 — the gunshot was swapped
+
+Items 29–32 above still stand, but the file behind them changed and was never
+committed until round 4 picked it up. `gunshot.ogg` is now a cut from the
+`22 Magnum.wav` track of the same CC0 pack, not `Black Powder.wav`: the black
+powder cut read as a muffled low boom rather than a revolver. Full provenance,
+including the exact trim and why the encode carries `volume=-4dB`, is in
+`docs/ASSETS.md`. So item 30's "if it still reads thin, the source is a dry,
+distant black-powder recording" has already been acted on — judge the new one
+on its own terms.
+
+---
+
+## Round 4 — bandits
+
+Three camps, hand-placed, all a long ride out. Their coordinates are in
+`src/config-ai.js`:
+
+| Camp | Where | Men |
+|---|---|---|
+| **Coyote Wash** | x −330, z 60 — due west of the plateau | 4 |
+| **Buzzard Rock** | x 360, z −60 — due east | 4 |
+| **Dry Fork** | x −150, z 330 — south-west, behind you at spawn | 3 |
+
+Each is built round a dead campfire, which is what makes it findable. Ride
+out; you cannot miss them once you are within about 60m.
+
+**Everything below was set from measurements and three static screenshots.
+Nobody has fought a bandit in real play.** What *was* seen in a screenshot:
+bandits stand and animate instead of T-posing, each has the revolver in his
+fist, the campfire reads as a camp, tracers and the HUD show. Everything about
+how it *feels* is yours.
+
+### The camp, before anything happens
+
+33. **Bandits stand around the fire and wander a little.** They should look
+    like men loitering, not like statues and not like they are pacing a
+    treadmill. Levers: `BANDIT.patrolRadius`, `patrolIntervalMin/Max`.
+34. **A camp seen from a distance should look like people.** Bandits more than
+    160m away are deliberately frozen mid-idle (`BANDIT.activeRadius`) to save
+    the frame. Check whether that is visible from the ridge — if you can see
+    them freeze and unfreeze as you ride in, that number needs raising.
+35. **The campfire should sit ON the ground**, not float or sink, on all three
+    camps. You cannot walk through it.
+
+### Being seen
+
+36. **Walk up in front of them and they notice you** — a beat of hesitation
+    (`BANDIT.alertTime`), then they come. Walk up behind them and they should
+    *not*; there is a real blind spot (`sightHalfAngle`, ±69°).
+37. **Fire a shot near a camp and the whole camp reacts**, not just the two men
+    facing you. This was a real bug and is now checked automatically, but the
+    *timing* is yours: `BANDIT.hearingRange` is 70m.
+38. **Break line of sight behind a big rock and they lose you** — they should
+    keep hunting your last known position for a few seconds
+    (`loseSightTime`), not stand still and not track you through the rock.
+
+### The fight
+
+39. **Two rounds drop a bandit.** Confirm by feel that it is two, and that the
+    first one produces a visible **flinch** — the real `HitRecieve` clip
+    plays and he stops shooting for about 0.4s.
+40. **The death should read.** He falls, the body settles on the ground and
+    stays there. Watch for a body sinking into a slope or standing back up.
+41. **Five hits kill you.** The red vignette flashes on each. **Judge its
+    strength** — it was softened once already without being watched, and the
+    lever is `#damageFlash`'s gradient in `index.html` plus
+    `HEALTH.damageFlashTime`.
+42. **Standing still in the open at a camp should kill you in under ten
+    seconds** and feel obviously stupid. If you can stand there indefinitely,
+    `BANDIT.spread` is too wide; if you die in three, it is too tight.
+43. **Taking cover behind a rock should actually work.** Their shots should
+    stop landing.
+44. **Watch them use cover.** A hurt bandit, or one who has lost sight of you,
+    goes to the *shoulder* of a nearby rock and shoots from there. Judge
+    whether that reads as cover or as milling about — this is the single
+    least-confident piece of the round. Levers: `coverSearchRadius`,
+    `coverPeekAngle`, `coverStandoff`, `coverHoldTime`.
+45. **Kill all but one and the last man runs.** He should keep running until
+    he is a long way off (`fleeDistance`, 90m) and then settle down again.
+46. **They should not walk through rocks**, and they should not get visibly
+    stuck on one for long. BUILD-PLAN.md explicitly accepts that they look
+    dumb in tight spaces; what is *not* acceptable is a man grinding against a
+    cactus forever. Levers: `avoidRayLength`, `avoidStrength`, `stuckDistance`.
+47. **You can outrun them.** Their run is 4.5 against your sprint of 5.5.
+48. **Fight a camp from horseback.** This is the round-3 promise cashed in.
+    The horse should still steer on A/D, the accuracy penalty should be
+    noticeable, and — importantly — **the horse should not be soaking up their
+    bullets**. Their shots deliberately ignore it, so a mounted rider is
+    hittable; check it does not feel like the opposite.
+49. **A dead rider comes off the horse.** Get killed while mounted: the body
+    should be put down on the ground, not left sitting in the saddle.
+
+### Dying and coming back
+
+50. **Death and respawn.** You fall, the screen says so, and after a couple of
+    seconds you are back at full health with a full cylinder.
+51. **Where you come back matters.** Die near a camp you have approached and
+    you should reappear about 55m from it, on the town side, facing it —
+    close enough to walk straight back in, far enough that they are not
+    already shooting. Die near the plateau and you go back to spawn.
+52. **The horse should still be findable after a respawn.** Press H.
+
+### Things round 4 changed that were working before
+
+BUILD-PLAN.md's standing warning is that round 4 breaks the horse. These are
+the specific places it touched:
+
+53. **The whole round-2 horse list still passes** — mount, ride, bank, gallop,
+    stamina, jump, dismount. The frame order changed (a dead rider is
+    dismounted before `horse.update`) and the revolver's geometry was rebuilt.
+54. **The revolver still looks right in the hand**, on foot and mounted. Its
+    seven parts were merged into three meshes for the draw-call budget; the
+    hold offsets were not touched, but the geometry was.
+55. **The reins, the riding pose and the aiming pose are unchanged** and
+    should look exactly as they did in round 3.
