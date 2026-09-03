@@ -177,24 +177,114 @@ export const BANDIT = {
  *
  * BUILD-PLAN.md asks for "3–5 enemies" per camp; 4/4/3 is eleven bandits.
  * Round 6's bounty board reads `name` straight off this list.
+ *
+ * `radius` is where the men stand, and it must clear
+ * `CAMP_PROPS.colliderRadius` (3.0) with room to spare — bandits.js places
+ * them between 0.9× and 1.4× of it. It was 6–7 when the fire was a pebble
+ * ring; a man spawned inside the bonfire would be shoved out by
+ * `resolveCollisions` on frame one, which works and looks like a bug.
  */
 export const CAMPS = [
-  { name: 'Coyote Wash', x: -330, z: 60, count: 4, radius: 7 },
-  { name: 'Buzzard Rock', x: 360, z: -60, count: 4, radius: 7 },
-  { name: 'Dry Fork', x: -150, z: 330, count: 3, radius: 6 },
+  { name: 'Coyote Wash', x: -330, z: 60, count: 4, radius: 9 },
+  { name: 'Buzzard Rock', x: 360, z: -60, count: 4, radius: 9 },
+  { name: 'Dry Fork', x: -150, z: 330, count: 3, radius: 8 },
 ];
 
-/** The dead fire each camp is built around — enough to make it read as a place. */
+/**
+ * The signal fire each camp is built around. **This is the camp's landmark,
+ * not its decoration** — the human's note after round 4 was "I didn't even
+ * know there was a campfire here", and they were right: the first version was
+ * a 1.2m ring of pebbles, invisible past about thirty metres.
+ *
+ * Making the *ring* bigger does not fix that. A fire pit is a ground-level
+ * object, and at 300m a ground-level object is behind a hill, under the
+ * grass, or lost in `FOG.density`. What carries is **height**, and mostly the
+ * smoke: a 30m column stands above the terrain, is the one dark vertical in a
+ * landscape of horizontals, and is exactly how you find a camp in a western.
+ *
+ * So there are three tiers here, each visible at a different range:
+ *   the pyre and its boulders   — close, tells you what you are standing at
+ *   the flame                   — mid, `fog: false` so it stays a bright
+ *                                 beacon rather than fading into the haze
+ *   the smoke column            — long, and the only one that survives 300m
+ */
 export const CAMP_PROPS = {
-  stoneCount: 9, // ring of stones about the ashes
-  stoneRadius: 0.17,
-  stoneRingRadius: 0.62,
+  // --- the pit itself ----------------------------------------------------
+  stoneCount: 14, // ring of boulders about the ashes
+  stoneRadius: 0.52,
+  stoneRingRadius: 2.8,
   stoneColor: 0x8a8071,
-  logCount: 4,
-  logRadius: 0.075,
-  logLength: 1.05,
-  logColor: 0x4a3524,
-  ashRadius: 0.5,
+  ashRadius: 2.4,
   ashColor: 0x2b2620,
-  colliderRadius: 0.75, // you cannot walk through a campfire
+
+  // --- the pyre: logs leaning inward to a teepee -------------------------
+  logCount: 8,
+  logRadius: 0.17,
+  logLength: 3.4,
+  logLean: 0.42, // radians off vertical; apex ends up ~3.1m up
+  logBaseRadius: 1.45, // how far out each log's foot stands
+  logColor: 0x4a3524,
+
+  // --- flame -------------------------------------------------------------
+  // Unlit (MeshBasicMaterial) and deliberately NOT fogged, so it reads as a
+  // light source at range instead of dissolving into the dust like geometry.
+  //
+  // NINE narrow tongues, not four fat ones. The first pass used six wide cones
+  // and it read as exactly that — flat triangles. What makes fire read is a
+  // RAGGED SILHOUETTE: many thin tongues at different heights, leaning out at
+  // different angles, flickering out of phase, so the outline never resolves
+  // into a shape you can name.
+  flameCount: 9, // tongues per fire
+  flameHeight: 5.2,
+  flameRadius: 0.82, // per tongue; wide enough that neighbours MERGE at the base
+  flameSpread: 0.85, // how far the outer tongues sit from the axis
+  flameLean: 0.3, // radians the outer tongues lick outward
+  flameHot: 0xffc247, // base
+  flameTip: 0xbb2f0c, // ...to tip
+  flameOpacity: 0.8,
+  flameFlicker: 0.34, // ± fraction of height, per tongue
+  flameFlickerRate: 7.5,
+  flameSpin: 0.5, // rad/s the tongues turn, so it never looks like a still
+
+  // --- smoke: the thing you actually see from the ridge -------------------
+  // ROUND, not quads. The first pass used the crossed-quad trick vfx.js uses
+  // for the muzzle flash, and at seven metres across it read as a stack of
+  // grey slabs — a 55ms flash gets away with a hard rectangular edge, a
+  // thirty-metre column standing in the sky does not. A low-poly sphere has no
+  // silhouette to give itself away, needs no billboarding, and a lot of them
+  // overlapping at low opacity is what a smoke column actually is.
+  // SEVENTY METRES, and that number is the whole feature. Measured from a
+  // screenshot at 320m: a 34m column subtends about 6°, most of which the
+  // intervening ridge ate, leaving a dark tick you would never notice — and at
+  // 120m the camp sat in a hollow and the column was hidden outright. A camp is
+  // 335m from the plateau; the smoke has to clear the terrain between, not just
+  // clear the camp.
+  smokeCount: 34, // puffs in flight per fire — enough to keep 85m continuous
+  smokeRise: 85,
+  smokeSpeed: 0.045, // column loops per second (≈22s from base to top)
+  smokeStartSize: 2.4,
+  smokeEndSize: 18.0, // it spreads as it climbs
+  smokeJitter: 3.0, // per-puff wander off the axis, so it is not a bead string
+  smokeDrift: 16, // metres the column leans downwind over its full rise
+  smokeDriftAngle: 2.2, // radians; the same "wind" for every camp
+  // Dark, and it STAYS dark. The first pass paled out to 0xa9a094 and the top
+  // of the column — the only part visible over a ridge — disappeared into an
+  // ochre sky. Smoke reads by contrast against the horizon, and this sky is
+  // bright, so the landmark has to be the dark half.
+  smokeNear: 0x2a251f, // dense at the fire...
+  smokeFar: 0x4d4639, // ...thinning, but never toward the sky
+  // Above this fraction of the rise a puff dissolves into COLORS.fog instead
+  // of vanishing when it recycles. An eighteen-metre sphere blinking out at
+  // the top of the column is the one thing that would give the whole trick
+  // away — but keep the fade LATE. At 0.72 it dissolved the top quarter, which
+  // is the only quarter that clears a ridge from 335m: measured from the
+  // plateau, the plume had gone the same colour as the sky at exactly the
+  // range the whole feature exists for.
+  smokeFadeFrom: 0.9,
+  smokeOpacity: 0.34,
+
+  // You cannot walk through a bonfire. It carries a real `top` (ADR-012) at
+  // the pyre's apex rather than the default Infinity: a shot should pass over
+  // a fire, and the flame above the logs is not what stops a bullet.
+  colliderRadius: 3.0,
 };

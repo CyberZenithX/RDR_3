@@ -386,6 +386,14 @@ The last three sample the arc from **inside** the render loop.
 - **draw calls with a whole camp on screen**, not just at spawn. The existing
   budget check samples at the plateau where no bandit is visible and would
   never have noticed round 4's 126
+- **the signal fire is a landmark, and its smoke column has no gaps.** Height,
+  flame size, and a collider that stops at the pyre rather than the flame —
+  plus the gap assertion, which is a confirmed regression check: per-puff
+  phases were `Math.random()` and thirty uniform samples on a line clump, so
+  the column rendered as two isolated blobs with a 10–18m hole under them.
+  Stratifying bounds the worst gap at 1.7x the average *by construction*,
+  which is why the threshold can be 1.9x and mean something. Reverting fails
+  three runs out of three
 
 Two recipes worth reusing:
 

@@ -1705,7 +1705,7 @@ const CHECKS = [
       return CAMPS.map((camp) => {
         let minH = Infinity; let maxH = -Infinity; let maxSlope = 0;
         for (let a = 0; a < 12; a++) {
-          for (const r of [0, 6, 12]) {
+          for (const r of [0, 7, 14]) {
             const x = camp.x + Math.cos((a / 12) * Math.PI * 2) * r;
             const z = camp.z + Math.sin((a / 12) * Math.PI * 2) * r;
             const h = heightAt(x, z);
@@ -1730,6 +1730,76 @@ const CHECKS = [
       if (c.slope > 0.25) return `camp "${c.name}" sits on a ${c.slope.toFixed(2)} slope`;
     }
     console.log(`  (info) camps: ${info.map((c) => `${c.name} ${c.fromTown.toFixed(0)}m out, ${c.spread.toFixed(1)}m spread`).join('; ')}`);
+    return null;
+  }],
+
+  ['the camp signal fire is a landmark, and its smoke column has no gaps', async () => {
+    // The human's note after round 4 was "I didn't even know there was a
+    // campfire here" — it was a 1.2m ring of pebbles. What replaced it only
+    // works if it stays big, so this is a floor under the whole feature.
+    //
+    // The GAP half is a real regression guard, and the bug it guards was real:
+    // per-puff phases were `Math.random()`, and thirty-odd independent uniform
+    // samples on a line clump. It rendered two isolated blobs high in the sky
+    // with nothing between them and the fire. Stratifying the phase — one puff
+    // per equal slice, jittered inside its own slice — bounds the worst gap at
+    // 1.7x the average spacing by construction; random bounds nothing.
+    const info = await page.evaluate(async () => {
+      const THREE = await import('three');
+      const { CAMP_PROPS } = await import('/src/config-ai.js');
+      const { colliders } = await import('/src/collision.js');
+      const d = window.__debug;
+      const fires = d.bandits.campfires;
+      if (!fires) return null;
+      const camp = d.bandits.camps[0];
+      const groundY = fires.baseY[0];
+      const m = new THREE.Matrix4();
+      const v = new THREE.Vector3();
+
+      const heights = [];
+      for (let i = 0; i < fires.smoke.count; i++) {
+        fires.smoke.getMatrixAt(i, m);
+        v.setFromMatrixPosition(m);
+        if (Math.hypot(v.x - camp.x, v.z - camp.z) > CAMP_PROPS.smokeDrift + CAMP_PROPS.smokeJitter + 5) continue;
+        heights.push(v.y - groundY);
+      }
+      heights.sort((a, b) => a - b);
+      let maxGap = 0;
+      for (let i = 1; i < heights.length; i++) maxGap = Math.max(maxGap, heights[i] - heights[i - 1]);
+
+      let flameTop = 0;
+      for (let i = 0; i < fires.flames.count; i++) {
+        fires.flames.getMatrixAt(i, m);
+        v.setFromMatrixPosition(m);
+        if (Math.hypot(v.x - camp.x, v.z - camp.z) > CAMP_PROPS.flameSpread + 2) continue;
+        // The cone's own height times this instance's Y scale.
+        flameTop = Math.max(flameTop, (v.y - groundY) + CAMP_PROPS.flameHeight * m.elements[5]);
+      }
+
+      const fire = colliders.find((c) => c.meta?.kind === 'campfire');
+      return {
+        puffs: heights.length,
+        columnTop: heights[heights.length - 1],
+        maxGap,
+        avgGap: CAMP_PROPS.smokeRise / CAMP_PROPS.smokeCount,
+        flameTop,
+        colliderR: fire?.r ?? null,
+        colliderTop: fire ? fire.top - groundY : null,
+        finiteTop: fire ? Number.isFinite(fire.top) : false,
+        smokeAnimates: fires.smoke.instanceMatrix.needsUpdate,
+      };
+    });
+    if (!info) return 'no campfires were built';
+    if (info.puffs < 20) return `only ${info.puffs} smoke puffs on the near camp — the column cannot be continuous`;
+    if (info.columnTop < 60) return `the smoke column tops out ${info.columnTop.toFixed(0)}m above the camp — it will not clear the ridges between here and the plateau`;
+    if (info.maxGap > info.avgGap * 1.9) {
+      return `a ${info.maxGap.toFixed(1)}m hole in the smoke column (average spacing ${info.avgGap.toFixed(1)}m) — the puff phases are clumping, not stratified`;
+    }
+    if (info.flameTop < 4) return `the flame is only ${info.flameTop.toFixed(1)}m tall — that is a campfire, not a signal fire`;
+    if (!(info.colliderR >= 2.5)) return `the fire's collider is ${info.colliderR} — you could walk through most of the bonfire`;
+    if (!info.finiteTop) return 'the campfire collider has an infinite top — a shot should pass over a fire';
+    if (info.colliderTop > 6) return `the campfire collider is ${info.colliderTop.toFixed(1)}m tall — that is the flame, not the pyre`;
+    console.log(`  (info) signal fire: ${info.puffs} puffs to ${info.columnTop.toFixed(0)}m, worst gap ${info.maxGap.toFixed(1)}m, flame ${info.flameTop.toFixed(1)}m`);
     return null;
   }],
 

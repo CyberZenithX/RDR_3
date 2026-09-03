@@ -577,6 +577,9 @@ how it *feels* is yours.
 35. **The campfire should sit ON the ground**, not float or sink, on all three
     camps. You cannot walk through it.
 
+    *Superseded by items 56–60 — the fire was rebuilt after you said you never
+    saw it. Item 35 still stands as written; there is just much more of it.*
+
 ### Being seen
 
 36. **Walk up in front of them and they notice you** — a beat of hesitation
@@ -648,3 +651,38 @@ the specific places it touched:
     hold offsets were not touched, but the geometry was.
 55. **The reins, the riding pose and the aiming pose are unchanged** and
     should look exactly as they did in round 3.
+
+### After round 4 — the signal fire
+
+You said you didn't even know there was a campfire. There is now a bonfire
+with an 85m smoke column, and it is meant to be the thing that tells you where
+a camp is from across the map. All of `CAMP_PROPS` in `src/config-ai.js` is
+the lever set.
+
+What I could verify from screenshots: the plume is visible and unmistakable
+from the spawn plateau, 335m from Coyote Wash, and from 120m it is a clear
+dark column standing out of the hollow. What I could not: whether it looks
+right in motion, which is all of the below.
+
+56. **Can you find a camp by its smoke?** Stand at spawn, look west toward
+    Coyote Wash. There should be one vertical dark mark on the horizon and it
+    should be obvious that it is smoke. This is the whole point of the change
+    — if it does not read from there, `CAMP_PROPS.smokeRise` (85) and
+    `smokeFadeFrom` (0.9, how late the top dissolves) are the two levers, in
+    that order.
+57. **Ride toward it.** The column should stay readable the whole way in, and
+    the flame should start to carry somewhere in the middle distance. The
+    flame is deliberately unfogged so it stays bright at range — if that reads
+    as cheating, it is `fog: false` on the flame material in `campfire.js`.
+58. **Does the fire look like fire?** Nine tongues flickering out of phase.
+    Judge it in motion; a still frame is the one thing I could see and the one
+    thing that cannot show whether the flicker rate is right
+    (`flameFlickerRate`, `flameFlicker`, `flameSpin`).
+59. **Does the smoke look like smoke?** It is thirty-four spheres rising,
+    spreading and paling. Watch for the recycle: a puff should have dissolved
+    into the haze before it vanishes and reappears at the bottom. If you can
+    see one pop, `smokeFadeFrom` is too late.
+60. **The fire should not be in anyone's way.** Bandits stand outside it, you
+    cannot walk into it, and a shot should pass *over* it rather than being
+    swallowed — its collider stops at the top of the pyre, not at the top of
+    the flame.

@@ -19,81 +19,14 @@
  * a bottle standing on a barrel lid.
  */
 
-import * as THREE from 'three';
-import { BANDIT, CAMPS, CAMP_PROPS, HEALTH } from './config-ai.js';
+import { BANDIT, CAMPS, HEALTH } from './config-ai.js';
 import { loadGLTF } from './assets.js';
 import { createRigFromGLTF } from './character.js';
 import { PlaceholderHuman } from './placeholder-human.js';
 import { cloneRig } from './rig-clone.js';
-import { addCircleCollider } from './collision.js';
 import { raycastCylinder } from './combat-ray.js';
+import { Campfires } from './campfire.js';
 import { Bandit } from './bandit.js';
-
-const _dummy = new THREE.Object3D();
-
-/** A ring of fire stones and a few fallen logs, so a camp reads as a place. */
-function buildCampfires(scene, camps, world) {
-  const p = CAMP_PROPS;
-  const stoneGeo = new THREE.IcosahedronGeometry(p.stoneRadius, 0);
-  const logGeo = new THREE.CylinderGeometry(p.logRadius, p.logRadius * 0.8, p.logLength, 6);
-  logGeo.rotateZ(Math.PI / 2);
-  const ashGeo = new THREE.CircleGeometry(p.ashRadius, 12);
-  ashGeo.rotateX(-Math.PI / 2);
-
-  const stones = new THREE.InstancedMesh(
-    stoneGeo, new THREE.MeshStandardMaterial({ color: p.stoneColor, roughness: 0.95 }),
-    camps.length * p.stoneCount,
-  );
-  const logs = new THREE.InstancedMesh(
-    logGeo, new THREE.MeshStandardMaterial({ color: p.logColor, roughness: 0.9 }),
-    camps.length * p.logCount,
-  );
-  const ash = new THREE.InstancedMesh(
-    ashGeo, new THREE.MeshStandardMaterial({ color: p.ashColor, roughness: 1 }),
-    camps.length,
-  );
-
-  let s = 0;
-  let l = 0;
-  camps.forEach((camp, i) => {
-    const groundY = world.groundHeightAt(camp.x, camp.z);
-    for (let k = 0; k < p.stoneCount; k++) {
-      const a = (k / p.stoneCount) * Math.PI * 2;
-      const r = p.stoneRingRadius * (0.9 + Math.random() * 0.2);
-      const x = camp.x + Math.cos(a) * r;
-      const z = camp.z + Math.sin(a) * r;
-      _dummy.position.set(x, world.groundHeightAt(x, z) + p.stoneRadius * 0.4, z);
-      _dummy.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
-      _dummy.scale.setScalar(0.7 + Math.random() * 0.6);
-      _dummy.updateMatrix();
-      stones.setMatrixAt(s++, _dummy.matrix);
-    }
-    for (let k = 0; k < p.logCount; k++) {
-      const a = (k / p.logCount) * Math.PI + i;
-      _dummy.position.set(camp.x, groundY + p.logRadius * 1.6, camp.z);
-      _dummy.rotation.set(0, a, (k % 2 ? 1 : -1) * 0.22);
-      _dummy.scale.setScalar(1);
-      _dummy.updateMatrix();
-      logs.setMatrixAt(l++, _dummy.matrix);
-    }
-    _dummy.position.set(camp.x, groundY + 0.02, camp.z);
-    _dummy.rotation.set(0, i * 1.1, 0);
-    _dummy.scale.setScalar(1);
-    _dummy.updateMatrix();
-    ash.setMatrixAt(i, _dummy.matrix);
-    // You cannot walk through a fire. `top` stays Infinity: a hopping horse
-    // clearing a campfire is not a thing this round needs to get right.
-    addCircleCollider(camp.x, camp.z, p.colliderRadius, { kind: 'campfire' });
-  });
-
-  for (const m of [stones, logs, ash]) {
-    m.castShadow = true;
-    m.receiveShadow = true;
-    m.instanceMatrix.needsUpdate = true;
-    scene.add(m);
-  }
-  return { stones, logs, ash };
-}
 
 export class Bandits {
   constructor({ scene, world, vfx, audio, targets, horse, gltf }) {
@@ -115,13 +48,17 @@ export class Bandits {
 
     // A live copy of each CAMPS entry — the config stays immutable data.
     this.camps = CAMPS.map((c) => ({ ...c, alive: c.count }));
-    this.campfires = buildCampfires(scene, this.camps, world);
+    // The signal fire is what makes a camp findable at all — see campfire.js.
+    this.campfires = new Campfires(scene, this.camps, world);
 
     this.bandits = [];
     for (const camp of this.camps) {
       for (let i = 0; i < camp.count; i++) {
         const angle = (i / camp.count) * Math.PI * 2 + camp.x * 0.01;
-        const r = camp.radius * (0.6 + Math.random() * 0.5);
+        // 0.9x-1.4x, not 0.6x: the fire is now three metres of collider and a
+        // man placed inside it would be shoved out by resolveCollisions on
+        // frame one, which works and looks exactly like a bug.
+        const r = camp.radius * (0.9 + Math.random() * 0.5);
         const x = camp.x + Math.cos(angle) * r;
         const z = camp.z + Math.sin(angle) * r;
         const character = this._makeRig(gltf);
@@ -219,6 +156,10 @@ export class Bandits {
    *   and written to for the checkpoint a camp arms (see player.markCamp).
    */
   update(dt, player) {
+    // Unconditional, and BEFORE the activation gate below: the men freeze past
+    // BANDIT.activeRadius, but a smoke column that only moves once you are
+    // already standing in the camp is not a landmark.
+    this.campfires.update(dt);
     for (const camp of this.camps) {
       if (Math.hypot(player.position.x - camp.x, player.position.z - camp.z) <= BANDIT.campApproachRadius) {
         player.markCamp(camp);

@@ -12,13 +12,18 @@ Rounds 0, 1, 2, 2b, 2c, 2d, 3, 4 are done. Round 5 is next.
 
 ### 0. What round 4 leaves you
 
-- **The draw-call budget is now the binding constraint.** 45 at spawn, **106**
-  with one bandit camp, the horse and the player in frame, against
-  BUILD-PLAN.md's ~120. Ten buildings on a street is exactly the kind of thing
-  that spends the rest of it. Two smoke checks watch the number now (at spawn
-  and at a camp); add a third at the town when it exists, and instance or merge
-  by material from the start rather than as a rescue. Round 4's own rescue —
-  merging the revolver's seven part-meshes into three — is the worked example.
+- **The draw-call budget is now the binding constraint.** 39–45 at spawn,
+  **110** with one bandit camp, its signal fire, the horse and the player in
+  frame, against BUILD-PLAN.md's ~120. Ten buildings on a street is exactly the
+  kind of thing that spends the rest of it. Two smoke checks watch the number
+  now (at spawn and at a camp); add a third at the town when it exists, and
+  instance or merge by material from the start rather than as a rescue. Round
+  4's own rescue — merging the revolver's seven part-meshes into three — is the
+  worked example, and the signal fire immediately spent four of what it saved.
+- **`campfire.js` is a reusable light/particle rig, not just a bandit thing.**
+  Round 5's "lamps and interior lights that will matter in round 7" can take
+  its flame tier as-is: an unlit vertex-coloured cone with `fog: false`, one
+  `InstancedMesh` for every lamp in town, flickering off a shared clock.
 - **`config.js` is at 389 of the 400-line cap.** A `config-town.js` is the
   fifth config file; ADR-027's closing note says that is the point to re-read
   the one-findable-place rule rather than re-apply it.

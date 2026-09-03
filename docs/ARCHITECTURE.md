@@ -318,12 +318,21 @@ AudioContext may start. Round 7's looping ambience wants a `loop()` alongside
 ### Bandits
 
 `src/bandits.js` — the camps. Loads `bandit.glb` **once** and clones a rig per
-man (`rig-clone.js`); builds the campfires (one `InstancedMesh` each for
-stones, logs and ash, plus a collider per fire); owns `rayIgnore` (every bandit
-collider plus the horse's), the `BANDIT.activeRadius` gate, `raycast()` (the
-foot-to-head cylinder the player's shots hit), `hit()` and `hearShot()`.
+man (`rig-clone.js`); owns `rayIgnore` (every bandit collider plus the
+horse's), the `BANDIT.activeRadius` gate, `raycast()` (the foot-to-head
+cylinder the player's shots hit), `hit()` and `hearShot()`.
 `buildBandits()` **never rejects**: a missing GLB is one warning and eleven
 capsule placeholders.
+
+`src/campfire.js` — `Campfires`: the signal fire, in three tiers sized by the
+range each has to work at. Pyre and boulders read up close; the flame is
+`MeshBasicMaterial` with **`fog: false`** so it stays a beacon at middle
+distance; the 85m smoke column is the only tier that survives 335m, and its
+top has to stay dark because the top is the part that clears a ridge. Five
+`InstancedMesh`es total, shared by every camp, and `update(dt)` runs for all of
+them regardless of `BANDIT.activeRadius` — a landmark that only animates once
+you are standing in it is not a landmark. Round 5's street lamps and the
+saloon's interior lights are the obvious second user of the flame half.
 
 `src/bandit.js` — one bandit's body. Position, a moving circle collider,
 `Health`, the rig, and its **own ~40-line firing path** — not `combat.js`
@@ -581,11 +590,13 @@ existed only while there was a retargeted player jump clip.
   big obstruction-triggered zoom-in. Not visually confirmed; minor.
 - **`resolveBox` has no real caller yet** — written and unit-testable, first
   used by round 5's buildings.
-- **The draw-call budget is tight.** 45 at spawn, **106** with one camp, the
-  horse and the player in frame, against BUILD-PLAN.md's ~120. Round 4 found
-  126 and got it back by merging the revolver's seven part-meshes into one per
-  material (`weapons.js`); a smoke check now samples at a camp as well as at
-  spawn. Round 5's buildings and round 7's performance pass share what is left.
+- **The draw-call budget is tight.** 39–45 at spawn, **110** with one camp,
+  its fire, the horse and the player in frame, against BUILD-PLAN.md's ~120.
+  Round 4 found 126 and got it back by merging the revolver's seven
+  part-meshes into one per material (`weapons.js`); the signal fire then spent
+  four of what that recovered. A smoke check now samples at a camp as well as
+  at spawn. Round 5's buildings and round 7's performance pass share what is
+  left, and it is not much.
 - **Dead bandits are never cleaned up.** The body stays, and its clamped Death
   clip is still mixer-updated whenever the player is inside
   `BANDIT.activeRadius`.

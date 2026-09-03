@@ -84,7 +84,8 @@ One line per file. Long form in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `src/player.js` | Movement, jump, gravity, grounding, collision, locomotion state, the mounted branch — plus health, dying, and **`respawn()`, the one function** round 7 swaps for a real checkpoint. |
 | `src/horse.js` | Everything **horizontal**: steering (normal *and* aiming), lean, stamina, collider, mount toggle. |
 | `src/horse-ai.js` | The unmounted wander/follow/whistle brain. Decides a heading and a speed; `horse.js` integrates them. |
-| `src/bandits.js` | The camps: one GLB load, a cloned rig per man, campfires, the shared ray-ignore set, the activation radius, `raycast()` / `hit()` / `hearShot()`. |
+| `src/bandits.js` | The camps: one GLB load, a cloned rig per man, the shared ray-ignore set, the activation radius, `raycast()` / `hit()` / `hearShot()`. |
+| `src/campfire.js` | The signal fire that makes a camp findable: pyre, flame, and the 85m smoke column. Five draw calls for every fire in the game. |
 | `src/bandit.js` | One bandit's body: position, collider, health, rig, and its own small firing path (**not** `combat.js` — ADR-028). |
 | `src/bandit-ai.js` | The brain: `patrol → alert → chase → takeCover → shoot → flee → dead`, three-ray avoidance, the stuck detector. Owns no position. |
 | `src/horse-jump.js` | Everything **vertical**: the arc, the pitch, `clearance()`. |
@@ -208,6 +209,11 @@ Read [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-027 through ADR-030.
   flinch's own duration and the caller uses that as the stagger.
 - Bandits beyond `BANDIT.activeRadius` (160) are **not ticked at all** — brain
   and rig both. They stay rendered, frozen mid-idle.
+- **The campfire is the camp's landmark, not its decoration** — it is how a
+  player 335m away knows where the bandits are, and `campfire.js` updates
+  every fire unconditionally for that reason. Height is what carries: the
+  smoke column is 85m and its top must stay DARK, because the top is the only
+  part that clears a ridge.
 
 ## Before modifying collision, or making something jumpable
 
@@ -336,12 +342,13 @@ These are still open:
   a camp wakes, whether the cover shuffle reads as cover or as milling about,
   whether the flinch is visible, whether being killed in ~8 seconds standing
   in the open is right, how strong the damage vignette should be — was set
-  from measurements and three static screenshots. Levers are tabulated in
+  from measurements and static screenshots. Levers are tabulated in
   `config-ai.js`. What *was* seen: bandits stand and animate rather than
-  T-posing, the revolver is in each man's fist, the campfire reads, the tracer
-  and the HUD show.
-- **The draw-call budget is now genuinely tight.** 45 at spawn, **106** with
-  one camp, the horse and the player on screen, against BUILD-PLAN.md's ~120.
+  T-posing, the revolver is in each man's fist, the tracer and the HUD show,
+  and the signal fire reads as a landmark from the spawn plateau 335m away.
+- **The draw-call budget is now genuinely tight.** 39–45 at spawn, **110**
+  with one camp, its fire, the horse and the player on screen, against
+  BUILD-PLAN.md's ~120.
   Merging the revolver's seven parts into one mesh per material took 20 off
   that. Round 5's buildings and round 7's performance pass both have to live
   inside what is left; the camp figure is now a smoke check.

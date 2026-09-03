@@ -618,6 +618,47 @@ budget item at eleven. The existing draw-call check sampled at spawn, where no
 bandit is visible, and would never have caught this; there is now a second one
 that stands the player in a camp.
 
+## The campfire nobody could see
+
+**Symptom.** The human's first note on round 4: "I didn't even know there was
+a campfire here." Three camps were built around a fire ring 1.2m across, and
+it was invisible past about thirty metres — so a camp was four men standing in
+open desert with nothing to say *this is a place*.
+
+**Cause, and the thing worth remembering.** Not that the ring was small. A
+fire pit is a **ground-level object**, and at three hundred metres a
+ground-level object is behind a hill, under the grass, or gone into
+`FOG.density`. Scaling it up would have fixed thirty metres and nothing else.
+What a camp needs at range is **height**, and mostly smoke: a dark vertical
+column in a landscape made entirely of horizontals.
+
+**Fix.** `campfire.js`, in three tiers sized by the range each has to work at
+— pyre and boulders up close, an unlit `fog: false` flame at middle distance,
+and an 85m smoke column that is the only tier surviving 335m. Three attempts
+were needed and each failure taught something:
+
+1. **Crossed quads read as stacked grey slabs.** The trick vfx.js uses for the
+   muzzle flash is fine for a 55ms flash; at seven metres across, standing
+   still in the sky, the rectangular silhouette is obvious. Low-poly spheres
+   have no silhouette to give away and still need no billboarding.
+2. **`Math.random()` per puff clumps.** Thirty independent uniform samples on
+   a line are not evenly spread — measured, they rendered two isolated blobs
+   with a 10–18m hole between them and the fire. Stratifying (one puff per
+   equal slice, jittered inside its own slice) bounds the worst gap at 1.7×
+   the average by construction. This is the round's confirmed regression
+   check; reverting it fails three runs out of three.
+3. **The column paled out at exactly the wrong end.** Puffs were lerped toward
+   the sky colour as they rose, which is what smoke does — but the top is the
+   only part that clears a ridge from 335m, so the landmark was dissolving
+   precisely where it had to be read. The fade now starts at 0.9 of the rise
+   and only hides the recycle.
+
+**The lesson.** "Make it bigger" and "make it visible from far away" are
+different problems, and the second one is almost always about height and
+contrast rather than size. Every one of the three failures above was found by
+taking a screenshot from the distance the feature is *for* — not from where it
+was convenient to stand.
+
 ## Two harness bugs that produced false passes
 
 Both live in [TESTING.md](TESTING.md) because they will bite the next check
