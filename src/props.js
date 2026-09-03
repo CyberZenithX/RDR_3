@@ -139,21 +139,35 @@ function makeDeadTreeGeometry(cfg) {
  * geometry variant, indexed the same way as `geometries` (rocks — lumpy
  * variants have measurably different worst-case visual radii, so one shared
  * factor either undersizes the spikiest variant or oversizes the mildest).
+ *
+ * `kind` is recorded on every collider's meta. Nothing in the game reads it
+ * yet — scripts/smoke.mjs uses it to talk about rocks specifically rather than
+ * about props in general (rocks are jumpable, cacti and trees are not), and
+ * round 3's shootable props will want the same label.
  */
-function scatterInstanced(scene, { geometries, material, count, minScale, maxScale, sink, colliderRadius }) {
+function scatterInstanced(scene, { geometries, material, count, minScale, maxScale, sink, colliderRadius, kind }) {
   const perVariant = geometries.map(() => []);
+  // Every geometry here is authored with its base at local y = 0, so its
+  // bounding box max is exactly how far the prop stands proud of the point it
+  // is placed at. That is what a jumping horse has to get its belly above —
+  // see collision.js's `top` and horse-jump.js's clearance().
+  const variantTops = geometries.map((geo) => {
+    if (!geo.boundingBox) geo.computeBoundingBox();
+    return geo.boundingBox.max.y;
+  });
   let placed = 0;
   for (let i = 0; i < count; i++) {
     const spot = pickSpot();
     if (!spot) continue;
     const scale = minScale + rng() * (maxScale - minScale);
     const variant = i % geometries.length;
+    const y = heightAt(spot.x, spot.z) - sink * scale;
     perVariant[variant].push({
-      x: spot.x, z: spot.z, y: heightAt(spot.x, spot.z) - sink * scale,
+      x: spot.x, z: spot.z, y,
       rotY: rng() * Math.PI * 2, scale,
     });
     const factor = Array.isArray(colliderRadius) ? colliderRadius[variant] : colliderRadius;
-    addCircleCollider(spot.x, spot.z, factor * scale);
+    addCircleCollider(spot.x, spot.z, factor * scale, { kind }, y + variantTops[variant] * scale);
     placed++;
   }
 
@@ -204,17 +218,17 @@ export function buildProps(scene) {
   const rocks = scatterInstanced(scene, {
     geometries: rockGeos, material: rockMat, count: PROPS.rock.count,
     minScale: PROPS.rock.minScale, maxScale: PROPS.rock.maxScale,
-    sink: PROPS.rock.sinkFactor, colliderRadius: PROPS.rock.colliderFactors,
+    sink: PROPS.rock.sinkFactor, colliderRadius: PROPS.rock.colliderFactors, kind: 'rock',
   });
   const cacti = scatterInstanced(scene, {
     geometries: cactusGeos, material: cactusMat, count: PROPS.cactus.count,
     minScale: PROPS.cactus.minScale, maxScale: PROPS.cactus.maxScale,
-    sink: 0, colliderRadius: PROPS.cactus.colliderRadius,
+    sink: 0, colliderRadius: PROPS.cactus.colliderRadius, kind: 'cactus',
   });
   const trees = scatterInstanced(scene, {
     geometries: treeGeos, material: treeMat, count: PROPS.tree.count,
     minScale: PROPS.tree.minScale, maxScale: PROPS.tree.maxScale,
-    sink: 0, colliderRadius: PROPS.tree.colliderRadius,
+    sink: 0, colliderRadius: PROPS.tree.colliderRadius, kind: 'tree',
   });
 
   return { rocks: rocks.placed, cacti: cacti.placed, trees: trees.placed };

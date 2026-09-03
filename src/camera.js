@@ -40,6 +40,14 @@ export class ThirdPersonCamera {
     this.pitch = 0.18;
     this.currentDistance = CAMERA.distance;
     this.mounted = false; // pulled back and raised while riding — see setMounted()
+    // 0..1, eased by combat.js rather than here so the camera, the pose and
+    // the crosshair all move on exactly the same curve. Aim and mounted
+    // COMPOSE — every framing number below is picked as a mounted/on-foot
+    // pair and then lerped toward its aimed counterpart, so aiming from the
+    // saddle is its own framing rather than one mode silently winning.
+    this.aim = 0;
+    this.baseFov = camera.fov;
+    this._shake = 0;
 
     this._pivot = new THREE.Vector3();
     this._forward = new THREE.Vector3();
@@ -48,11 +56,58 @@ export class ThirdPersonCamera {
     this._desiredPos = new THREE.Vector3();
     this._lookTarget = new THREE.Vector3();
     this._swayTime = 0;
+    this._pivotY = null; // damped; null until the first snap()/update() seeds it
+  }
+
+  /**
+   * The pivot's height, chased rather than copied straight from the player.
+   * A horse jump moves the rider 1.5m vertically in under a second, and a
+   * pivot welded to that drags the whole world down with it; lagging slightly
+   * reads as the camera being left behind, which is what a jump should feel
+   * like. Terrain undulation is far slower than `pivotFollowRate` and is
+   * followed essentially exactly, so on-foot framing is unchanged.
+   */
+  _followPivotY(targetY, dt) {
+    if (this._pivotY === null || Math.abs(targetY - this._pivotY) > CAMERA.pivotSnapDistance) {
+      this._pivotY = targetY; // first frame, or a teleport — not motion to smooth
+    } else {
+      this._pivotY += (targetY - this._pivotY) * (1 - Math.exp(-CAMERA.pivotFollowRate * dt));
+    }
+    return this._pivotY;
   }
 
   /** Called by main.js whenever the player mounts/dismounts. Swaps distance/pivot height only — everything else (collision march, sway, damping) is shared. */
   setMounted(mounted) {
     this.mounted = mounted;
+  }
+
+  /** @param {number} weight 0..1 aim blend, from combat.js. See `this.aim`. */
+  setAiming(weight) {
+    this.aim = THREE.MathUtils.clamp(weight, 0, 1);
+  }
+
+  /**
+   * A shot. `pitchKick` climbs the muzzle, `shake` is a positional jolt that
+   * decays over the next few frames. Both are additive, so fanning the hammer
+   * stacks — which is the point.
+   */
+  addRecoil(pitchKick, shake) {
+    this.pitch = THREE.MathUtils.clamp(this.pitch - pitchKick, CAMERA.pitchMin, CAMERA.pitchMax);
+    this._shake = Math.min(CAMERA.shakeMax, this._shake + shake);
+  }
+
+  /** How far back the camera sits, for whichever of the four mode combinations is live. */
+  _baseDistance() {
+    const hip = this.mounted ? CAMERA.mountedDistance : CAMERA.distance;
+    const aimed = this.mounted ? CAMERA.mountedAimDistance : CAMERA.aimDistance;
+    return THREE.MathUtils.lerp(hip, aimed, this.aim);
+  }
+
+  /** How high above the player the pivot sits, same four combinations. */
+  _pivotHeight() {
+    const hip = this.mounted ? CAMERA.mountedPivotHeight : CAMERA.pivotHeight;
+    const aimed = this.mounted ? CAMERA.mountedAimPivotHeight : CAMERA.aimPivotHeight;
+    return THREE.MathUtils.lerp(hip, aimed, this.aim);
   }
 
   /** Reads accumulated mouse movement and applies it to yaw/pitch. Call once per frame before update(). */
@@ -85,7 +140,7 @@ export class ThirdPersonCamera {
    * mounted camera was inside the player's head before this fix.
    */
   _maxUnobstructedDistance(pivot, dirX, dirY, dirZ, ignoreCollider) {
-    const baseDistance = this.mounted ? CAMERA.mountedDistance : CAMERA.distance;
+    const baseDistance = this._baseDistance();
     let maxDist = baseDistance;
 
     // March the analytic heightfield rather than raycasting the rendered mesh
@@ -114,8 +169,9 @@ export class ThirdPersonCamera {
 
   /** Places the camera at its target position immediately, no damping — call once after spawning. */
   snap(playerPos, ignoreCollider) {
-    const pivotHeight = this.mounted ? CAMERA.mountedPivotHeight : CAMERA.pivotHeight;
-    this._pivot.set(playerPos.x, playerPos.y + pivotHeight, playerPos.z);
+    const pivotHeight = this._pivotHeight();
+    this._pivotY = playerPos.y + pivotHeight;
+    this._pivot.set(playerPos.x, this._pivotY, playerPos.z);
     const cosPitch = Math.cos(this.pitch);
     const dirX = Math.sin(this.yaw) * cosPitch;
     const dirY = Math.sin(this.pitch);
@@ -127,8 +183,27 @@ export class ThirdPersonCamera {
   }
 
   update(dt, playerPos, speed, ignoreCollider) {
-    const pivotHeight = this.mounted ? CAMERA.mountedPivotHeight : CAMERA.pivotHeight;
-    this._pivot.set(playerPos.x, playerPos.y + pivotHeight, playerPos.z);
+    const pivotHeight = this._pivotHeight();
+    this._pivot.set(playerPos.x, this._followPivotY(playerPos.y + pivotHeight, dt), playerPos.z);
+
+    // Over-the-shoulder: slide the whole pivot sideways so the character sits
+    // off-centre and the crosshair looks down a clear lane. Shifting the pivot
+    // (rather than only the look target) keeps the occlusion sweep honest —
+    // it marches from where the camera actually is.
+    if (this.aim > 0.001) {
+      this.getRight(this._right);
+      const shift = CAMERA.aimShoulderShift * this.aim;
+      this._pivot.x += this._right.x * shift;
+      this._pivot.z += this._right.z * shift;
+    }
+
+    // Narrower FOV while aiming, eased rather than snapped — three@0.160 has
+    // no MathUtils.damp, so this is the same hand-rolled smoothing used below.
+    const targetFov = THREE.MathUtils.lerp(this.baseFov, CAMERA.aimFov, this.aim);
+    if (Math.abs(this.camera.fov - targetFov) > 0.01) {
+      this.camera.fov += (targetFov - this.camera.fov) * (1 - Math.exp(-CAMERA.fovLerpRate * dt));
+      this.camera.updateProjectionMatrix();
+    }
 
     const cosPitch = Math.cos(this.pitch);
     const dirX = Math.sin(this.yaw) * cosPitch;
@@ -155,6 +230,17 @@ export class ThirdPersonCamera {
 
     const posDamp = 1 - Math.exp(-CAMERA.positionDamping * dt);
     this.camera.position.lerp(this._desiredPos, posDamp);
+
+    // Screen shake, applied after the damped move so it is a jolt rather than
+    // something the damping smooths away into a slow drift.
+    if (this._shake > 0.0001) {
+      this.camera.position.x += (Math.random() * 2 - 1) * this._shake;
+      this.camera.position.y += (Math.random() * 2 - 1) * this._shake;
+      this.camera.position.z += (Math.random() * 2 - 1) * this._shake;
+      this._shake *= Math.exp(-CAMERA.shakeDecay * dt);
+    } else {
+      this._shake = 0;
+    }
 
     this._lookTarget.copy(this._pivot);
     this._lookTarget.y += CAMERA.lookAheadHeight;

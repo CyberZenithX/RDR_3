@@ -81,10 +81,21 @@ export class PlaceholderHorse {
     this._phase = 0;
     this._time = 0;
     this._speed = 0;
+    this._airborne = false;
   }
 
   setLocomotion(_state, speed) {
     this._speed = speed;
+  }
+
+  /**
+   * Same interface as the real rig's one-shot jump clip. There is no mixer
+   * here, so this is a flag that update() turns into a held tucked pose rather
+   * than an animation — the airTime the real rig uses to stretch its clip has
+   * nothing to stretch here and is ignored.
+   */
+  setAirborne(airborne, _airTime = 0) {
+    this._airborne = !!airborne;
   }
 
   update(dt) {
@@ -109,6 +120,16 @@ export class PlaceholderHorse {
         leg.hip.rotation.x *= 1 - ease;
         leg.knee.rotation.x *= 1 - ease;
       }
+    }
+
+    // Airborne pose, held over whatever the gait above just wrote — all four
+    // legs tucked, the way the real rig's Gallop_Jump reads.
+    if (this._airborne) {
+      for (const leg of Object.values(this.legs)) {
+        leg.hip.rotation.x = cfg.jumpTuckHip;
+        leg.knee.rotation.x = cfg.jumpTuckKnee;
+      }
+      this.body.position.y = cfg.bodyHeight + cfg.jumpTuckRise;
     }
   }
 }

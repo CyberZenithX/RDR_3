@@ -17,7 +17,7 @@ export function loadGLTF(path) {
 }
 
 /**
- * findClip(gltf, ...candidates) — per CLAUDE.md's contract: for each candidate
+ * findClip(gltf, ...candidates) — per docs/ANIMATION.md: for each candidate
  * in order, try an EXACT match on the clip name's segment after `|` (this
  * rig's clips are prefixed `CharacterArmature|` / `AnimalArmature|`), case
  * insensitive, before falling back to substring. Returns null, never the

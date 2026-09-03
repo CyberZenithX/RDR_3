@@ -8,20 +8,20 @@
  */
 
 /**
- * The horse. See horse.js/horse-character.js for behavior, CLAUDE.md's
- * "Models — inventory" for the round-1 flag this round resolves.
+ * The horse. See horse.js/horse-character.js for behavior, docs/HORSE.md and
+ * docs/ASSETS.md for the round-1 scale flag this round resolves.
  */
 export const HORSE = {
   modelPath: '/models/horse.glb',
   // NOT measureHeight()-derived like the player — that lies for this rig.
   // Hardcoded from a real-bone-world-position measurement instead; see
-  // CLAUDE.md's "Models — inventory" for the full writeup and how to redo it
-  // for a model swap. Visually confirmed at this value via screenshot.
+  // docs/ASSETS.md for the full writeup and how to redo it for a model
+  // swap. Visually confirmed at this value via screenshot.
   modelScale: 0.58,
   // The rig's local +Z (nose) is the opposite of this game's yaw-0-faces--Z
   // convention (same mismatch player.glb had). Confirmed by direct render
   // (isolated top-down shot with a -Z compass arrow, nose lined up exactly),
-  // not just inferred from bone coordinates — see CLAUDE.md.
+  // not just inferred from bone coordinates — see docs/DECISIONS.md ADR-005.
   meshYawOffset: Math.PI,
   colliderRadius: 0.95,
   spawnOffset: { x: 7, z: -5 }, // relative to SPAWN, where the horse starts
@@ -44,7 +44,7 @@ export const HORSE = {
   // bone's world Y): this bone travels 0.006 through idle, 0.058 through walk
   // and 0.146 through gallop, and its *mean* height differs per gait too
   // (~1.53 idle, ~1.42 walk) — so any fixed offset necessarily floats at one
-  // gait and sinks at another. See CLAUDE.md.
+  // gait and sinks at another. See docs/HORSE.md.
   saddleBone: 'Torso2',
   // How much of the back's vertical travel the rider actually takes. A real
   // rider absorbs part of it through hip/knee flex rather than being welded to
@@ -81,11 +81,88 @@ export const HORSE = {
   mountLerpTime: 0.4,
   dismountDistance: 1.8, // how far to the side of the horse the player lands
 
+  // -- jumping (Space, while mounted) -- see horse-jump.js -------------------
+  // The arc is integrated, not read from the clip. `Gallop_Jump` exists on this
+  // rig (so no retargeting problem, unlike the player's removed jump) but is a
+  // leg tuck: measured off the GLB, its Body bone rises only 0.231 world units
+  // across the whole 1.458s clip, against 0.134 for one ordinary Gallop stride.
+  // apex = jumpSpeed^2 / (2*|gravity|) = 1.70m, airTime = 2*jumpSpeed/|gravity|
+  // = 0.89s, which at a gallop covers about 8.2m of ground — roughly the width
+  // of a median rock's collider plus the horse's own. Chosen against the actual
+  // rock population rather than by feel: tops run 0.6-3.6m (see props.js), and
+  // belly + apex has to land inside that range or the jump is either useless or
+  // makes every boulder in the world irrelevant.
+  jumpSpeed: 7.6,
+  gravity: -17, // weaker than the player's -22: a big animal hangs a little longer
+  groundSnap: 0.3, // distance below the hooves that still counts as landed
+  coyoteTime: 0.12, // ...still jumpable this long after leaving the ground
+  jumpBuffer: 0.18, // ...and a press this early still fires on landing
+  jumpMinSpeed: 1.0, // must be moving at least at a walk; no pogo-sticking on the spot
+  jumpStaminaCost: 0.1,
+
+  // Underside of the barrel, above the horse's own root. Measured by raycasting
+  // UP into the *animated* mesh (SkinnedMesh.raycast applies bone transforms;
+  // the geometry buffer would report the bind pose): 1.10 at the narrowest
+  // point under the barrel, rising to 1.42 toward the quarters. The low reading
+  // is the one that matters. Cross-checked in the same pass — the back surface
+  // read 1.88-1.97 against the 1.98 the saddle offset was set from.
+  bellyHeight: 1.1,
+  jumpClearMargin: 0.12, // an obstacle must clear the belly by this to be passed
+
+  jumpPitchTakeoff: 0.3, // radians nose-UP while rising (negated in horse-jump.js)
+  jumpPitchLanding: 0.24, // ...and nose-down over the descent
+  jumpPitchRate: 6, // smoothing rate on that pitch
+  jumpPoseBlendRate: 9, // how fast the rider's two-point seat blends in and out
+  riderJumpFollow: 0.75, // fraction of the horse's jump pitch the rider shares
+  jumpSeatRise: 0.11, // metres the rider lifts out of the saddle at full jump weight
+  // The saddle bone's travel through Gallop_Jump, measured the way the gait
+  // figures above were — stepping the clip and reading `Torso2` in the horse's
+  // own body frame — is 1.157 (-0.408 to +0.750 against its captured rest).
+  // That is EIGHT times the gallop's 0.144, because the clip rears the whole
+  // forehand up about a root pinned at ground level.
+  //
+  // Both numbers below were originally set from the 0.231 docs/HORSE.md quotes
+  // for the `Body` bone, which is not the bone the seat samples, and both were
+  // therefore far too tight: the seat pegged at 0.30 while the back kept rising
+  // to 0.75, and the horse came up through the rider around the apex.
+  jumpSaddleFollow: 1, // no hip flex absorbs 0.75m — while airborne, follow the back outright
+  jumpBobLimit: 0.85, // safety clamp only: clear of the measured 0.750, not a tuning lever
+  // Clamp on how far the seat tracks the spine bone longitudinally. Gallop_Jump
+  // carries 1.146 world units of baked forward travel on Body, which would
+  // otherwise leave the rider sitting over the rump halfway through the arc.
+  saddleDriftLimit: 1.4,
+
+  // The size of the tank, in the same units the rates below are per-second in.
+  // Briefly raised to 1.5 and then put back to 1 on the human's call: a gallop
+  // runs 4.55s from full and a full refill takes 7.7s. This is still NOT
+  // assumed to be a 0..1 fraction anywhere — the stamina bar takes
+  // `horse.staminaFraction`, not `horse.stamina`, precisely so this number can
+  // move without the UI needing to know, and that stays true at 1.
   staminaMax: 1,
   staminaDrainRate: 0.22, // per second at a gallop
   staminaRegenRate: 0.13, // per second at anything less than a gallop
+  // Both thresholds are absolute, not fractions of the tank, and were left
+  // where they are: the post-exhaustion lockout stays the same ~1.7s however
+  // big the tank gets, rather than the punishment scaling with the buff.
   staminaExhaustedFloor: 0.04, // gallop is refused at/below this...
   staminaExhaustedRecover: 0.22, // ...until stamina climbs back above this (hysteresis, no flicker)
+
+  // ------------------------------------------------------ mounted combat ---
+  // Round 3. These live here rather than in config-combat.js because they are
+  // properties of shooting FROM A HORSE, not properties of the gun (ADR-009).
+
+  // Multipliers on the shot's spread cone, so they scale hip fire and aimed
+  // fire together instead of flattening the difference between them.
+  mountedAccuracyPenalty: 2.4,
+  jumpAccuracyPenalty: 1.9, // stacked on top, while the horse is over an obstacle
+
+  // While the rider is aiming, W/S and the gallop are dropped and the horse
+  // steers on A/D alone (BUILD-PLAN.md: "the horse keeps steering with A/D").
+  // It keeps whatever pace it had, capped, rather than coasting to a halt —
+  // stopping dead the moment the gun comes up is not what a horse does.
+  aimTurnRate: 1.35, // rad/s of yaw from a held A or D
+  aimMaxSpeed: 5.2, // the pace an aiming rider is held to, m/s
+  aimSpeedDecay: 0.55, // per second, toward that cap
 };
 
 /** Speed → locomotion state hysteresis, mirrors player.js's classifySpeed but with the horse's own thresholds. */
@@ -98,11 +175,21 @@ export const HORSE_ANIM = {
   maxTimeScale: 1.8,
 };
 
-/** Candidates per logical clip. horse.glb has no Trot — see CLAUDE.md's clip inventory. */
+/**
+ * Candidates per logical clip. horse.glb has no Trot — see docs/ANIMATION.md's
+ * clip inventory.
+ *
+ * `jump` is a one-shot, not a locomotion state: horse-character.js plays it
+ * through setAirborne() and setLocomotion() stands aside for the duration.
+ * The rig also ships `Jump_toIdle` (1.708s), which is a jump-to-halt
+ * transition — wrong for landing back into a gallop, so it is deliberately
+ * left unwired rather than blended into the landing.
+ */
 export const HORSE_CLIP_CANDIDATES = {
   idle: ['Idle', 'Idle_2', 'Idle_Headlow'],
   walk: ['Walk'],
   gallop: ['Gallop'],
+  jump: ['Gallop_Jump'],
 };
 
 /** Metres/second each horse clip is authored at — same feet-don't-slide reasoning as CLIP_REFERENCE_SPEED. Tuned by eye. */
@@ -116,7 +203,7 @@ export const HORSE_CLIP_REFERENCE_SPEED = { idle: 1, walk: 2.4, gallop: 7 };
  * this rig's rest orientations are baked-IK arbitrary and hand-authoring angles
  * in bone-local space is unreadable.
  *
- * player.glb has no seated clip of any kind (see CLAUDE.md's clip inventory —
+ * player.glb has no seated clip of any kind (see docs/ANIMATION.md's list —
  * all 24 are standing/combat), so this pose is the whole of "sitting on a
  * horse". It is applied *after* mixer.update() every frame, which is what lets
  * it win over the idle clip still playing underneath.
@@ -151,6 +238,19 @@ export const RIDING_POSE = {
   swayElbow: 0.16, // rein hands give with each stride
   swayTorso: 0.05,
   swayThigh: 0.05, // legs absorb a little of the motion the seat doesn't
+
+  // The jumping (two-point) seat, blended in by HORSE.jumpPoseBlendRate while
+  // airborne and added on top of the angles above. A rider over a jump comes
+  // up out of the saddle, folds forward at the hip with their weight in the
+  // heels, and pushes their hands up the neck so the horse can stretch its
+  // head and neck out over the obstacle. The vertical part of "coming up out
+  // of the saddle" is HORSE.jumpSeatRise, not an angle — see horse-seat.js.
+  jumpTorsoPitch: 0.34, // fold forward at the hip, on top of torsoPitch
+  jumpThighPitch: -0.18, // thigh comes back under the rider, out of the sitting angle
+  jumpKneeBend: 0.3, // ...and the knee closes to take the weight
+  jumpArmPitch: 0.3, // hands go forward up the neck...
+  jumpElbowBend: -0.35, // ...by opening the elbow, not by lifting the shoulder alone
+  jumpHeadPitch: -0.1, // eyes up, looking past the obstacle rather than down at it
 };
 
 /**
@@ -210,4 +310,9 @@ export const PLACEHOLDER_HORSE = {
   bobAmplitude: 0.05,
   idleBreathAmplitude: 0.02,
   idleBreathFrequency: 0.8,
+  // Airborne pose. No mixer here, so this is a held pose rather than a clip —
+  // all four legs tucked, the same way the real rig's Gallop_Jump reads.
+  jumpTuckHip: -0.5,
+  jumpTuckKnee: 1.0,
+  jumpTuckRise: 0.06,
 };
