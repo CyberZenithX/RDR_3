@@ -1061,11 +1061,18 @@ const CHECKS = [
         bandit: d.bandits.bandits[0] ? count(d.bandits.bandits[0].character.root) : null,
         horse: count(d.horse.character.root),
         placeholder: d.player.character.isPlaceholder,
+        // Each rig falls back independently, so each has to be asked
+        // separately — a capsule placeholder has no materials to merge and
+        // legitimately carries more meshes than a merged GLB.
+        banditPlaceholder: !!d.bandits.bandits[0]?.character.isPlaceholder,
+        horsePlaceholder: !!d.horse.character.isPlaceholder,
       };
     });
     if (info.placeholder) return null; // capsules have nothing to merge
-    if (!(info.horse <= 2)) return `horse rig is ${info.horse} meshes — the merge did not run`;
-    if (info.bandit !== null && !(info.bandit <= 9)) return `bandit rig is ${info.bandit} meshes, expected well under 16`;
+    if (!info.horsePlaceholder && !(info.horse <= 2)) return `horse rig is ${info.horse} meshes — the merge did not run`;
+    if (!info.banditPlaceholder && info.bandit !== null && !(info.bandit <= 9)) {
+      return `bandit rig is ${info.bandit} meshes, expected well under 16`;
+    }
     if (!(info.player <= 12)) return `player rig is ${info.player} meshes, expected it merged`;
     return null;
   }],
@@ -2398,15 +2405,19 @@ const CHECKS = [
       const bone = b?.character.root.getObjectByName('Chest');
       return bone ? { q: bone.quaternion.toArray(), t: b.corpseT, clip: b.deathClipT } : null;
     });
-    if (!poseA) return 'no dead bandit found to sample';
-    if (!(poseA.t > poseA.clip)) return `death clip has not finished yet (t=${poseA.t?.toFixed(2)} of ${poseA.clip?.toFixed(2)})`;
+    // The pose-drift half needs a real skeleton; capsule placeholders have no
+    // Chest bone. The retirement half below works for either and still runs.
+    const banditPlaceholder = await page.evaluate(() => !!window.__debug.bandits.bandits[0]?.character.isPlaceholder);
+    if (!poseA && banditPlaceholder) console.log('  (info) bandits are capsule placeholders — skipping the pose-drift half');
+    else if (!poseA) return 'no dead bandit found to sample';
+    if (poseA && !(poseA.t > poseA.clip)) return `death clip has not finished yet (t=${poseA.t?.toFixed(2)} of ${poseA.clip?.toFixed(2)})`;
     await page.waitForFunction((n) => window.__frames > n, await page.evaluate(() => window.__frames + 6), { timeout: 30000 });
     const poseB = await page.evaluate(() => {
       const b = window.__debug.bandits.bandits.find((x) => !x.alive && x.corpseT > x.deathClipT);
       const bone = b?.character.root.getObjectByName('Chest');
       return bone ? bone.quaternion.toArray() : null;
     });
-    if (poseB) {
+    if (poseA && poseB) {
       const drift = Math.max(...poseA.q.map((v, i) => Math.abs(v - poseB[i])));
       if (drift > 0.001) return `a finished corpse is still being posed (bone moved ${drift.toFixed(4)} after the clip clamped)`;
     }
