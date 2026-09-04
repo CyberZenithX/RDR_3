@@ -91,8 +91,7 @@ One line per file. Long form in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `src/horse-jump.js` | Everything **vertical**: the arc, the pitch, `clearance()`. |
 | `src/horse-seat.js` | Where the rider sits: spine sampling (`bob`/`sway`/`drift`), the banked seat point. |
 | `src/rig-merge.js` | **New.** Collapses a character GLB's one-mesh-per-colour layout (16 on a bandit) into a few meshes grouped by shading, baking each flat material colour into a vertex-colour attribute. Took a camp from **110 draw calls to 63**, and spawn from 49 to 34. Declines to touch anything textured, transparent, double-sided or non-standard. |
-| `src/strap.js` | **New.** The shared leather builder — square tubes written along an arbitrary curve into one buffer per frame. Extracted from reins.js when the saddle needed it; the pattern to copy for any strap that spans two skeletons. |
-| `src/saddle.js` | **New.** Saddle, girth and stirrups. Rides the same seat point (bob and all) as the rider so the two cannot drift apart; the stirrup iron is placed at the rider's own foot bone while mounted. |
+| `src/strap.js` | **New.** The shared leather builder — square tubes written along an arbitrary curve into one buffer per frame. Extracted from reins.js; the pattern to copy for any strap that spans two skeletons. |
 | `src/ik.js` | **New.** `aimBoneAt` and `solveTwoBoneIK`. Aims bones by *direction* rather than by local angle, which is what makes it usable on this baked-IK skeleton at all. |
 | `src/bandit-gun.js` | **New.** One bandit's firing path, split out of bandit.js when the aim lead pushed it past the 400-line cap. Still deliberately not combat.js (ADR-028). |
 | `src/tuning.js` | **New, debug only.** Live slider panel over the feel constants (F2, or `?tune`), with a Copy button that emits only what changed. Builds no DOM until opened. |
@@ -414,6 +413,15 @@ These are still open:
 - **No wind on the grass** (round 7), **no saddle/stirrup geometry** — the
   rider's boots hang where stirrups would be, holding nothing. Audio is now
   three one-shots (gunshot / reload / hit); round 7 owns the ambience.
+- **A procedural saddle was built and withdrawn — do not rebuild it the same
+  way.** `saddle.js` placed a saddle/girth/stirrup group at the seat point each
+  frame and set `group.rotation` from the horse's yaw and lean. In play it
+  levitated and slid side to side independently of the animal. The seat point is
+  a *rider* target — it is spine-bob sampled, drift-clamped and mount-blended
+  (`horse-seat.js`), so it deliberately does **not** sit still on the horse's
+  back. Anything that must look bolted to the horse has to ride the horse's
+  bones directly, not the seat. The rider tolerates the seat point because the
+  rider is supposed to move against the animal; a saddle is not.
 - **Mouse-look orbit direction** was derived analytically and never watched.
   If inverted, it's one sign flip in `camera.js`'s `handleLook()`.
 - **Grass colour and keep-out fixes have not been visually re-confirmed**

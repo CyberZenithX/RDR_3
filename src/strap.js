@@ -1,11 +1,13 @@
 /**
- * strap.js — the shared builder for leather: reins, bridle cheekpieces, girth,
- * stirrup leathers. Anything that is a thin strip following a line through the
- * world and has to be rebuilt every frame.
+ * strap.js — the shared builder for leather: reins and bridle cheekpieces
+ * today. Anything that is a thin strip following a line through the world and
+ * has to be rebuilt every frame.
  *
- * Extracted from reins.js when the saddle needed the same thing, and named in
- * CLAUDE.md as the pattern to copy for any future strap-like geometry — a rifle
- * sling, a holster belt, a hitching rope.
+ * Extracted from reins.js when a second consumer needed the same thing, and
+ * named in CLAUDE.md as the pattern to copy for any future strap-like geometry
+ * — a rifle sling, a holster belt, a hitching rope. That second consumer (a
+ * procedural saddle) was withdrawn; the extraction is kept because reins.js is
+ * simpler for it and the next strap should not re-derive square-tube writing.
  *
  * WHY REBUILD RATHER THAN PARENT. These straps span two skeletons (a rein runs
  * from the horse's mouth to the rider's fist) and both rigs carry large baked
