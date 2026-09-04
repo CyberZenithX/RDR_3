@@ -37,6 +37,7 @@
  */
 
 import * as THREE from 'three';
+import { solveTwoBoneIK } from './ik.js';
 import { AIM_POSE } from './config-combat.js';
 
 // Reused scratch — nothing in here allocates per frame.
@@ -50,7 +51,12 @@ const _euler = new THREE.Euler();
 
 /** Bones this layer claims. Deliberately disjoint from riding-pose.js's legs/Torso. */
 const ARM_R = ['UpperArmR', 'LowerArmR', 'WristR'];
-const ARM_L = ['UpperArmL', 'LowerArmL'];
+const ARM_L = ['ShoulderL', 'UpperArmL', 'LowerArmL', 'WristL'];
+
+const _ikTarget = new THREE.Vector3();
+const _ikPole = new THREE.Vector3();
+const _left = new THREE.Vector3();
+const _qLeft = new THREE.Quaternion(); // separate from _qRoot, which apply() is mid-way through using
 const SPINE = ['Chest', 'Head'];
 
 /** Right-hand finger joints, built the same way riding-pose.js builds both hands'. */
@@ -214,6 +220,12 @@ export class AimPose {
     const armZ = (p.armIn + p.reloadArmIn * r) * w; // +Z turns the RIGHT arm inward
     this._rotate(this.bones.UpperArmR, armX, 0, armZ);
     if (sup > 0.0001) {
+      // The support SHOULDER comes forward and across, which is what a shooter
+      // actually does with their off side — and here it is also load-bearing
+      // arithmetic. Measured on this rig: the arm is 0.423 long and the gun's
+      // support point sits 0.556 from the left shoulder, so without this the
+      // hand cannot reach the gun at all and the IK below just clamps short.
+      this._rotate(this.bones.ShoulderL, -p.supportShoulderForward * sup, 0, -p.supportShoulderIn * sup);
       // Mirrored in Z, and it carries the SAME elevation as the gun arm. It
       // used to take half, which looked fine level and visibly wrong aiming
       // up — the two hands drifted apart exactly when the pose is most
@@ -229,6 +241,29 @@ export class AimPose {
     if (sup > 0.0001) this._rotate(this.bones.LowerArmL, -p.supportElbowBend * sup, 0, 0);
     this._rotate(this.bones.WristR, -p.wristPitch * w, 0, 0);
     this.root.updateMatrixWorld(true);
+
+    // The support hand, solved onto the gun rather than posed near it. The
+    // three angles above only get it into the neighbourhood — they cannot
+    // track a target that moves with elevation, which is why the gap between
+    // the hands used to open and close as the gun came up. This runs last,
+    // after the gun arm and the wrist are final and the weapon has moved with
+    // them, because the thing it aims at is bolted to the gun.
+    if (sup > 0.0001 && this.weapon?.support) {
+      this.weapon.syncWorld();
+      this.weapon.support.getWorldPosition(_ikTarget);
+      // Elbow points down and out from the body, the way an elbow does — the
+      // solve is otherwise free to roll it anywhere around the arm's axis.
+      this.bones.UpperArmL.getWorldPosition(_ikPole);
+      // +X in the character root's own frame is their left (riding-pose.js).
+      _left.set(1, 0, 0).applyQuaternion(this.root.getWorldQuaternion(_qLeft));
+      _ikPole.y -= 1;
+      _ikPole.addScaledVector(_left, 0.6);
+      solveTwoBoneIK(
+        this.bones.UpperArmL, this.bones.LowerArmL, this.bones.WristL,
+        _ikTarget, _ikPole, sup,
+      );
+      this.root.updateMatrixWorld(true);
+    }
 
     // Close the gun hand. Borrowed wholesale from the riding pose — see the
     // constructor. Driven by `hold`, not `weight`: a lowered gun is still held.

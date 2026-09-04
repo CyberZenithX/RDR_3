@@ -30,6 +30,25 @@ export const HEALTH = {
   playerDamage: 1, // what one of the player's rounds takes off a bandit
   banditDamage: 1, // ...and what one of theirs takes off the player
 
+  /**
+   * The horse had no health at all until now — nothing could hurt it and
+   * nothing tested it. It has some, but ONLY while riderless.
+   *
+   * That restriction is the whole design. While the horse is being ridden its
+   * collider stays in the bandits' ray-ignore set, so shots pass through it to
+   * the rider; letting the animal soak rounds aimed at a mounted player would
+   * be the invulnerability that set exists to prevent, and it would change a
+   * lethality the human has now confirmed in play reads right. A riderless
+   * horse standing in a firefight is a different case, and one where being
+   * shootable is simply true.
+   *
+   * A horse never dies here. Killing the player's only transport at a camp
+   * 300m from anywhere is a punishment the game has no answer for, so instead
+   * it bolts, and recovers on its own — see HORSE.spook* in config-horse.js.
+   */
+  horseMax: 6,
+  horseDamage: 1,
+
   // How long a bandit is staggered out of the fight by a hit. Long enough to
   // read as a flinch, short enough that two shots in a row still kill.
   hitStagger: 0.42,
@@ -104,6 +123,24 @@ export const BANDIT = {
   aimSettleTime: 0.35, // gun comes up before the first shot of an engagement
   playerHitRadius: 0.36, // the cylinder a bandit's round has to cross to hit you
 
+  /**
+   * How much a bandit leads a moving target. 0 aims where you are, 1 aims
+   * where you would be if you held your course for the whole flight time.
+   *
+   * Until now this was 0 in all but name: a bandit aimed a straight line at
+   * your chest with no allowance for movement at all, which made a galloping
+   * rider far harder to hit than the spread numbers suggest. It is deliberately
+   * PARTIAL rather than perfect — a man snap-shooting with a revolver leads
+   * badly — and deliberately modest, because the human has now confirmed in
+   * play that a camp is dangerous enough as it stands. Raising it toward 1
+   * makes riding past a camp much more punishing; 0 restores the old behaviour
+   * exactly.
+   */
+  aimLead: 0.3,
+  aimLeadBulletSpeed: 90, // notional flight speed the lead is computed against
+  horseHitRadius: 0.95, // riderless-horse cylinder a round has to cross
+  horseHitHeight: 2.0,
+
   // Line of sight is two raycasts, run by every bandit that can see this far.
   // Recomputing it 60 times a second per bandit is wasted work — a man does
   // not step behind a rock in 140ms — so the answer is cached this long.
@@ -163,6 +200,25 @@ export const BANDIT = {
    */
   campApproachRadius: 70, // coming this close arms that camp as the respawn
   respawnStandoff: 55,
+
+  /**
+   * What happens to a body once its Death clip has clamped.
+   *
+   * Before this, a corpse was permanent: it went on being mixer-updated every
+   * frame inside `activeRadius` (a posed skeleton's cost, paid forever, for a
+   * clip that had already stopped moving) and went on costing its draw calls.
+   * Both compound with play time, and draw calls are the budget round 5 has to
+   * fit a town inside — see CLAUDE.md.
+   *
+   * The clip still plays out in full, and the body still lies there long
+   * enough to read as the aftermath of a fight; it just stops costing anything
+   * once nobody is looking at it changing.
+   */
+  corpseFreezeGrace: 0.15, // extra seconds of mixer after the clip's own duration, so it clamps cleanly
+  corpseLinger: 25, // how long a body lies there in full before it starts to go
+  corpseSinkTime: 3, // seconds spent sinking into the ground
+  corpseSinkDepth: 1.4, // far enough under that no part of the body shows
+  maxCorpses: 6, // bodies kept at once; the oldest goes early rather than piling up
 };
 
 // ------------------------------------------------------------------- camps ---

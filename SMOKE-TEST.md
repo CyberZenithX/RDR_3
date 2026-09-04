@@ -686,3 +686,44 @@ right in motion, which is all of the below.
     cannot walk into it, and a shot should pass *over* it rather than being
     swallowed — its collider stops at the top of the pyre, not at the top of
     the flame.
+
+## Maintenance pass — draw calls, corpses, tack, IK, horse health
+
+Seven fixes, chosen from the open-issues list. Machine checks cover the
+geometry; these are the things only a person can judge.
+
+1. **Nothing looks different that shouldn't.** `rig-merge.js` rebuilds every
+   character as a few merged meshes with per-vertex colours instead of one mesh
+   per colour. The player, the bandits and the horse should look *exactly* as
+   they did. Watch for: a body part turning white or grey (a lost colour), a
+   limb detaching, or shading that has gone flat or plastic on one part.
+2. **Bodies go away.** Kill a few bandits, watch one for ~25 seconds: it should
+   lie still, then sink into the ground and vanish. Kill more than six and the
+   oldest should start going early. Ride away, come back — the bodies you left
+   should be gone, not waiting for you.
+3. **The saddle and stirrups.** A saddle with a girth round the barrel, and the
+   rider's boots *in* the stirrups rather than beside them. Mount and ride:
+   the saddle should stay glued under the rider through every stride, and lean
+   with the horse through turns. Dismount: the stirrups should hang empty.
+4. **The support hand is on the gun.** Aim (right mouse) and sweep the aim up
+   and down. The left hand should stay on the revolver at every elevation. The
+   old failure was a visible gap that opened as the gun came up. Watch also for
+   the off shoulder looking hunched or dislocated — it is deliberately rolled
+   forward to make the reach possible.
+5. **Shooting near rocks.** Fire past the top and shoulder of a big rock. The
+   spark should appear where the round meets stone, not floating in the air
+   beside it. Shots that visually clear the rock should carry on past.
+6. **A riderless horse under fire.** Leave the horse near a camp and let them
+   shoot at it. It should take hits and then bolt at a gallop, refusing to be
+   whistled or mounted until it settles (~6s), then calm down. It must never
+   die. **Mounted, none of this applies** — shots must still reach you, not be
+   soaked by the animal.
+7. **Bandits leading a galloping rider.** `BANDIT.aimLead` is now 0.3, so they
+   aim slightly ahead of where you are going. Gallop past a camp: it should be
+   harder than before, but not sharply so. **If riding past a camp now feels
+   unfair, this is the number** — 0 restores exactly the old behaviour.
+8. **The tuning panel (F2, or load with `?tune`).** Sliders over the feel
+   constants. Drag while playing; the game should respond immediately. "Copy
+   changes" puts only what you altered on the clipboard and in the console.
+   It is debug-only — check it is not visible until you press F2, and that
+   nothing on it is required to play.

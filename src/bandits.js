@@ -24,6 +24,7 @@ import { loadGLTF } from './assets.js';
 import { createRigFromGLTF } from './character.js';
 import { PlaceholderHuman } from './placeholder-human.js';
 import { cloneRig } from './rig-clone.js';
+import { mergeRigMeshes } from './rig-merge.js';
 import { raycastCylinder } from './combat-ray.js';
 import { Campfires } from './campfire.js';
 import { Bandit } from './bandit.js';
@@ -45,11 +46,18 @@ export class Bandits {
      */
     this.rayIgnore = new Set();
     if (horse?.collider) this.rayIgnore.add(horse.collider);
+    // Kept so a bandit can test the horse itself when nobody is riding it —
+    // the collider above stays ignored either way. See HEALTH.horseMax.
+    this.horse = horse ?? null;
 
     // A live copy of each CAMPS entry — the config stays immutable data.
     this.camps = CAMPS.map((c) => ({ ...c, alive: c.count }));
     // The signal fire is what makes a camp findable at all — see campfire.js.
     this.campfires = new Campfires(scene, this.camps, world);
+
+    // Merge the ONE loaded rig before cloning it eleven times, so every clone
+    // inherits the cheaper geometry and the work is done once. See rig-merge.js.
+    if (gltf?.scene) this.meshMerge = mergeRigMeshes(gltf.scene);
 
     this.bandits = [];
     for (const camp of this.camps) {
@@ -68,6 +76,9 @@ export class Bandits {
         this.bandits.push(bandit);
       }
     }
+
+    // Bodies waiting to be taken away — see _updateCorpses().
+    this._corpses = [];
 
     this.counts = { camps: this.camps.length, bandits: this.bandits.length };
     this.usingPlaceholders = this.bandits.some((b) => b.character.isPlaceholder);
@@ -174,6 +185,50 @@ export class Bandits {
       if (dx * dx + dz * dz > r2) continue;
       b.update(dt, player);
     }
+    this._updateCorpses(dt);
+  }
+
+  /**
+   * Takes bodies away once they have finished falling.
+   *
+   * Deliberately outside the `activeRadius` gate above: a body you shot and
+   * rode away from should still be gone when you come back, and clearing it is
+   * a handful of arithmetic rather than a posed skeleton. A corpse that is
+   * never cleared costs its draw calls forever, and draw calls are exactly
+   * what round 5's town has to fit inside.
+   */
+  _updateCorpses(dt) {
+    let live = 0;
+    // Newest first, so the count below retires the oldest bodies rather than
+    // whichever happens to sit early in the array.
+    this._corpses.sort((a, b) => a.corpseT - b.corpseT);
+    for (const b of this._corpses) {
+      if (b.retired) continue;
+      // Aged here rather than in Bandit.update(), which only runs inside
+      // `activeRadius` — a body you rode away from should still be gone when
+      // you come back.
+      b.corpseT += dt;
+      live++;
+      // Past the cap, the oldest bodies start going immediately instead of
+      // waiting out their linger.
+      const crowded = live > BANDIT.maxCorpses;
+      const age = b.corpseT - b.deathClipT;
+      const linger = crowded ? 0 : BANDIT.corpseLinger;
+      if (age < linger) continue;
+
+      const sink = Math.min(1, (age - linger) / BANDIT.corpseSinkTime);
+      b.character.root.position.y = b.position.y - sink * BANDIT.corpseSinkDepth;
+      if (sink >= 1) {
+        b.character.root.visible = false;
+        b.retired = true;
+        live--;
+      }
+    }
+  }
+
+  /** Called by a bandit as it dies, so the group can retire the body later. */
+  addCorpse(bandit) {
+    this._corpses.push(bandit);
   }
 }
 

@@ -71,6 +71,14 @@ export const GUN = {
   // gun's own origin (the back of the frame). Not the camera — BUILD-PLAN.md
   // is explicit about this, and smoke.mjs checks the parent chain.
   muzzleOffset: { x: 0, y: 0, z: 0.30 },
+  /**
+   * Where the off hand wraps the gun. Same units and same axes as
+   * `muzzleOffset` — metres in the hand bone's own frame, scale divided out at
+   * attach time. Under and a little behind the frame, which is where a second
+   * hand actually goes on a revolver: cupping the grip hand, not gripping the
+   * barrel.
+   */
+  supportOffset: { x: 0, y: -0.05, z: -0.05 },
 
   colorSteel: 0x4a4a52,
   colorBlued: 0x2e2f36,
@@ -133,6 +141,10 @@ export const AIM_POSE = {
 
   // Left arm — the supporting hand comes up under the right while on foot.
   // Scaled away while mounted, where the left hand keeps the reins.
+  // The off shoulder rolling forward and across toward the gun. Without it the
+  // support hand is physically short of the grip — see aim-pose.js.
+  supportShoulderForward: 0.52,
+  supportShoulderIn: 0.34,
   supportArmPitch: 1.20,
   supportArmIn: 0.62,
   supportElbowBend: 0.85,

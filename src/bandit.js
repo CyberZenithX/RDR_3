@@ -25,13 +25,14 @@
  */
 
 import * as THREE from 'three';
-import { PLAYER, ANIM, TOWN, BOUNDARY } from './config.js';
+import { ANIM, TOWN, BOUNDARY } from './config.js';
 import { BANDIT, HEALTH } from './config-ai.js';
 import { COMBAT } from './config-combat.js';
 import { addCircleCollider, removeCollider, resolveCollisions } from './collision.js';
 import { makeHit, resetHit, raycastCylinder, raycastColliders, raycastTerrain } from './combat-ray.js';
 import { Health } from './health.js';
 import { BanditAI } from './bandit-ai.js';
+import { fireAt } from './bandit-gun.js';
 
 // Reused by every bandit, every frame — nothing in here allocates.
 const _dir = new THREE.Vector3();
@@ -39,12 +40,6 @@ const _desired = new THREE.Vector3();
 const _diff = new THREE.Vector3();
 const _from = new THREE.Vector3();
 const _to = new THREE.Vector3();
-const _muzzle = new THREE.Vector3();
-const _shot = new THREE.Vector3();
-const _end = new THREE.Vector3();
-const _side = new THREE.Vector3();
-const _perp = new THREE.Vector3();
-const _up = new THREE.Vector3(0, 1, 0);
 
 /** Duplicated from player.js per ADR-010 — ten lines, and the thresholds differ. */
 function lerpAngle(a, b, t) {
@@ -163,7 +158,12 @@ export class Bandit {
   }
 
   _die() {
-    this.character.setDead(true);
+    // How long the body is still worth animating. bandits.js drives everything
+    // after that — freeze, linger, sink — see BANDIT.corpseLinger.
+    this.deathClipT = (this.character.setDead(true) || 0) + BANDIT.corpseFreezeGrace;
+    this.corpseT = 0;
+    this.retired = false;
+    this.group?.addCorpse?.(this);
     this.character.setAimPose({ weight: 0 });
     this._aimWeight = 0;
     this.velocityXZ.set(0, 0, 0);
@@ -188,8 +188,11 @@ export class Bandit {
   update(dt, player) {
     this._losT = Math.max(0, this._losT - dt);
     if (!this.alive) {
-      // The clip still has to play out and clamp; nothing else moves.
-      this.character.update(dt);
+      // The clip still has to play out and clamp — but only that long. Past it
+      // the pose never changes again, so going on posing a whole skeleton every
+      // frame buys nothing. `corpseT` is advanced by bandits.js, not here, so
+      // that a body left behind still ages while the player is far away.
+      if (this.corpseT <= this.deathClipT) this.character.update(dt);
       return;
     }
 
@@ -272,81 +275,9 @@ export class Bandit {
       this.group.audio?.play('reload', this.position);
       return;
     }
-    this._fire(player);
+    fireAt(this, player);
   }
 
-  _fire(player) {
-    this.ammo--;
-    this._fireTimer = BANDIT.fireInterval + Math.random() * BANDIT.fireIntervalJitter;
-    this._recoil = COMBAT.recoilPoseKick;
-
-    // The muzzle empty, refreshed from the skeleton up — the same rule the
-    // player's shot obeys, and for the same reason (weapons.js).
-    const weapon = this.character.weapon;
-    weapon.syncWorld();
-    weapon.muzzleWorldPosition(_muzzle);
-
-    _to.set(player.position.x, player.position.y + BANDIT.chestHeight, player.position.z);
-    _shot.subVectors(_to, _muzzle);
-    if (_shot.lengthSq() < 1e-8) return;
-    _shot.normalize();
-    const spread = BANDIT.spread * (this.speed > ANIM.idleThreshold ? BANDIT.movingSpreadFactor : 1);
-    this._applySpread(_shot, spread);
-
-    resetHit(this._hit);
-    // The player first and explicitly, as a cylinder from their feet to the
-    // top of their head — see the file header for why not via the collider list.
-    if (raycastCylinder(
-      _muzzle, _shot, BANDIT.fireRange,
-      player.position.x, player.position.z,
-      player.position.y, player.position.y + PLAYER.modelHeight,
-      BANDIT.playerHitRadius, this._hit,
-    )) {
-      this._hit.kind = 'player';
-      this._hit.ref = player;
-    }
-    this.group.targets?.raycast(_muzzle, _shot, BANDIT.fireRange, this._hit);
-    raycastColliders(_muzzle, _shot, BANDIT.fireRange, this.group.rayIgnore, this._hit);
-    raycastTerrain(_muzzle, _shot, BANDIT.fireRange, this._hit);
-
-    if (this._hit.hit) _end.copy(this._hit.point);
-    else _end.copy(_muzzle).addScaledVector(_shot, BANDIT.fireRange);
-    this.group.vfx?.enemyFire(_muzzle, _end);
-    this.group.audio?.play('gunshot', _muzzle);
-    // Gunfire wakes the camp — and what it tells the others is where the
-    // ENEMY is, not where the shooter is standing. Broadcasting the muzzle
-    // would send four men running toward their own friend; measured, without
-    // this only the two bandits who happened to be facing the player ever
-    // joined the fight while the other two patrolled through it.
-    this.group.hearShot(player.position.x, player.position.z);
-
-    if (!this._hit.hit) return;
-    if (this._hit.kind === 'player') {
-      player.damage(HEALTH.banditDamage);
-      this.group.audio?.play('hit', this._hit.point);
-      return;
-    }
-    const groundY = this.world.groundHeightAt(this._hit.point.x, this._hit.point.z);
-    this.group.vfx?.impact(this._hit.point, this._hit.normal, groundY);
-    const outcome = this.group.targets?.hit(this._hit.ref) ?? null;
-    if (outcome === 'destroyed') {
-      this.group.vfx?.burst(this._hit.point, this._hit.kind === 'bottle' ? 0x2f5e3a : 0x6d4a2a, groundY);
-    }
-  }
-
-  /** Scatters `dir` into a random cone. Same disc-uniform sampling combat.js uses. */
-  _applySpread(dir, spread) {
-    if (spread <= 0) return;
-    _side.crossVectors(dir, _up);
-    if (_side.lengthSq() < 1e-6) _side.set(1, 0, 0);
-    _side.normalize();
-    _perp.crossVectors(dir, _side).normalize();
-    const angle = Math.random() * Math.PI * 2;
-    const radius = Math.tan(spread) * Math.sqrt(Math.random());
-    dir.addScaledVector(_side, Math.cos(angle) * radius)
-      .addScaledVector(_perp, Math.sin(angle) * radius)
-      .normalize();
-  }
 
   /** Drives the rig: gait, the aiming layer, and the transform. */
   _pose(dt, player) {
