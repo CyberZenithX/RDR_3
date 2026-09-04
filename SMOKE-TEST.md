@@ -701,10 +701,15 @@ geometry; these are the things only a person can judge.
    lie still, then sink into the ground and vanish. Kill more than six and the
    oldest should start going early. Ride away, come back — the bodies you left
    should be gone, not waiting for you.
-3. **The saddle and stirrups.** A saddle with a girth round the barrel, and the
+3. ~~**The saddle and stirrups.** A saddle with a girth round the barrel, and the
    rider's boots *in* the stirrups rather than beside them. Mount and ride:
    the saddle should stay glued under the rider through every stride, and lean
-   with the horse through turns. Dismount: the stirrups should hang empty.
+   with the horse through turns. Dismount: the stirrups should hang empty.~~
+   **WITHDRAWN — nothing to check here.** It failed this test in play: the
+   saddle levitated and slid left and right independently of the horse, so
+   `saddle.js` was deleted rather than fixed. There is no saddle geometry in
+   the game. See CLAUDE.md's open-rough-edges list for why the seat point is
+   the wrong thing to hang tack off, if anyone tries again.
 4. **The support hand is on the gun.** Aim (right mouse) and sweep the aim up
    and down. The left hand should stay on the revolver at every elevation. The
    old failure was a visible gap that opened as the gun came up. Watch also for

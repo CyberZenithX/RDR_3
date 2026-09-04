@@ -12,7 +12,6 @@ import { Player } from './player.js';
 import { createHorseCharacter } from './horse-character.js';
 import { Horse } from './horse.js';
 import { Reins } from './reins.js';
-import { Saddle } from './saddle.js';
 import { ThirdPersonCamera } from './camera.js';
 import { initInput, onPointerLockChanged } from './input.js';
 import { initUI } from './ui.js';
@@ -79,7 +78,6 @@ async function init() {
   // Spans both skeletons, so it is built after both and updated after both —
   // see reins.js for why it is not parented into either one.
   const reins = new Reins(scene, horseCharacter, character);
-  const saddle = new Saddle(scene, horse, character);
   window.__debug.horse = horse; // debug hook, not read by gameplay code
   window.__debug.reins = reins; // debug hook, not read by gameplay code
 
@@ -168,7 +166,6 @@ async function init() {
     // After both rigs have been posed for this frame, so the straps land on
     // this frame's mouth and fists rather than last frame's.
     reins.update(player.mounted);
-    saddle.update(player.mounted);
 
     // The other half of combat's frame: the rig is now posed, so the muzzle is
     // where it will be rendered and a shot can be fired from it. Firing in

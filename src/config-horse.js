@@ -294,35 +294,6 @@ export const TACK = {
   // straight run from bit to hands cuts through the crest of the neck whenever
   // the horse lowers its head, which it does hard at a gallop.
   neckClearance: 0.28,
-
-  // The saddle, girth and stirrups (saddle.js). Heights are measured from the
-  // seat point — HORSE.saddleOffset.y, where the rider's hips go — so the
-  // saddle and the rider stay put relative to each other by construction.
-  saddleColor: 0x4a3524,
-  ironColor: 0x8d8f95,
-  seat: {
-    length: 0.62, // fore-aft
-    width: 0.36,
-    thickness: 0.08,
-    skirt: 0.5, // the flap under the rider's thigh
-    skirtWidth: 0.66, // wide enough to drape over a barrel measured at 0.66 across
-    pommel: 0.13, // the rise in front
-    cantle: 0.15, // ...and behind, which is taller
-    riseHeight: 0.11,
-    drop: -0.12, // seat surface sits this far under the hips, so the rider sits ON it
-  },
-  // The girth wraps the barrel, so it is sized from the barrel rather than from
-  // the saddle: raycasting the animated mesh puts the back at 1.98 above the
-  // horse's origin and the belly at 1.10, so the ring's centre belongs halfway
-  // between and its radius is half that span, plus a little to stand proud.
-  girthDrop: 0.43, // below the seat surface — lands on the barrel's centre line
-  girthHalfWidth: 0.36, // barrel half-width at the girth is ~0.33 (raycast-measured)
-  girthHalfHeight: 0.47,
-  stirrupHang: 0.19, // how far out from the centreline the leathers hang
-  stirrupRadius: 0.075,
-  stirrupThickness: 0.018,
-  stirrupUnderBoot: -0.02, // the iron sits just under the sole
-  stirrupRestDrop: 0.62, // how far the empty stirrup hangs when nobody is up
 };
 
 /** Proportions for the procedural quadruped stand-in used if horse.glb fails to load. */
