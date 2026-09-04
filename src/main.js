@@ -21,6 +21,7 @@ import { Vfx } from './vfx.js';
 import { createAudio } from './audio.js';
 import { Combat } from './combat.js';
 import { buildBandits } from './bandits.js';
+import { buildTown } from './town.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, RENDER.maxPixelRatio));
@@ -55,6 +56,14 @@ async function init() {
   window.__debug.propCounts = world.propCounts;
   window.__debug.scene = scene; // debug hook, not read by gameplay code
 
+  // Before the player, so its box colliders and its raised floor plates are in
+  // place from frame one — the player's own spawn is on the plateau's open
+  // ground, but nothing should be constructed against a half-built world.
+  ui.setLoadingText('raising the town…');
+  const town = await buildTown(scene, world);
+  window.__debug.townCounts = town.counts;
+  window.__debug.town = town; // debug hook, not read by gameplay code
+
   ui.setLoadingText('loading player…');
   const character = await createPlayerCharacter();
   window.__debug.modelsLoaded.player = !character.isPlaceholder;
@@ -78,6 +87,10 @@ async function init() {
   // Spans both skeletons, so it is built after both and updated after both —
   // see reins.js for why it is not parented into either one.
   const reins = new Reins(scene, horseCharacter, character);
+  // BUILD-PLAN.md: "Hitching post outside the saloon where the horse waits."
+  // The public entry point, so the horse never imports the town — see
+  // horse-ai.js's setHitchPost for the "you walked off and left it" rule.
+  horse.setHitchPost(town.hitch);
   window.__debug.horse = horse; // debug hook, not read by gameplay code
   window.__debug.reins = reins; // debug hook, not read by gameplay code
 
@@ -114,6 +127,7 @@ async function init() {
 
   const combat = new Combat({
     player, horse, camera, tpCamera, world, targets, bandits, vfx, audio,
+    townsfolk: town.townsfolk,
     weapon: character.weapon,
   });
   window.__debug.combat = combat; // debug hook, not read by gameplay code
@@ -178,6 +192,12 @@ async function init() {
     // obeys for the player.
     bandits.update(dt, player);
 
+    // After combat for the same reason the bandits are: a round fired at a
+    // citizen resolves before that citizen decides to run. This also advances
+    // the lamps and the saloon's door trigger, which reads the player's final
+    // position for this frame.
+    town.update(dt, player);
+
     tpCamera.setMounted(player.mounted);
     tpCamera.setAiming(combat.aimWeight);
     ui.setMounted(player.mounted);
@@ -186,6 +206,8 @@ async function init() {
     ui.updateHealth(player.health.current);
     ui.updateDamageFlash(player.damageFlash);
     ui.setDead(player.dead);
+    ui.updateScreenFade(town.fade);
+    ui.setPlaceName(town.placeName);
     // While mounted, ignore the horse's own collider in the camera's
     // occlusion sweep — the rider's pivot sits right on/inside it, which
     // otherwise collapses the camera to CAMERA.minDistance every frame.
@@ -224,6 +246,11 @@ async function init() {
     // again. Round 4 is the first round that adds a lot of skinned meshes, so
     // this is now a number worth watching rather than a debug curiosity.
     window.__debug.drawCalls = renderer.info.render.calls;
+    window.__debug.insideSaloon = town.inside;
+    window.__debug.screenFade = town.fade;
+    window.__debug.townsfolkAlive = town.townsfolk?.aliveCount ?? 0;
+    window.__debug.townsfolkStates = town.townsfolk?.states ?? [];
+    window.__debug.horseHitchMode = horse.ai.mode;
   });
 }
 

@@ -14,7 +14,8 @@
  * turns the animal. That is what keeps the mounted and unmounted paths going
  * through exactly the same physics rather than drifting apart.
  *
- * Round 5's hitching post is the obvious next entry in the `mode` machine.
+ * Round 5 added the hitching post as the next entry in the `mode` machine —
+ * see `setHitchPost`.
  */
 
 import * as THREE from 'three';
@@ -30,10 +31,33 @@ export class HorseAI {
     this.spookRecoverT = 0;
     this._spookHeading = 0;
     this.horse = horse;
-    this.mode = 'wander'; // 'wander' | 'follow' | 'coming'
+    this.mode = 'wander'; // 'wander' | 'follow' | 'coming' | 'hitched'
     this.whistled = false;
     this.wanderTarget = new THREE.Vector3().copy(horse.position);
     this.timer = 0;
+    /** The rail outside the saloon, once round 5's town has been built. */
+    this.hitch = null;
+    /** A yaw to settle on while standing still, or null — horse.js reads it. */
+    this.holdYaw = null;
+  }
+
+  /**
+   * Round 5's hitching post. BUILD-PLAN.md: "Hitching post outside the saloon
+   * where the horse waits."
+   *
+   * The rule is deliberately *"you walked off and left it"* rather than
+   * *"you are in town"*: the horse heads for the rail once the player is near
+   * the post AND has put more than `followSettleDistance` between them. So you
+   * ride in, step down, walk toward the saloon, and the animal takes itself to
+   * the rail behind you — but whistling it over in the middle of the street
+   * keeps it there, because you are standing next to it. Without that second
+   * clause, a whistle in town is answered and then immediately undone, which
+   * reads as the horse ignoring you.
+   *
+   * @param {{x:number,z:number,yaw:number,callRadius:number,arriveDistance:number}|null} point
+   */
+  setHitchPost(point) {
+    this.hitch = point;
   }
 
   /** Called on an H-key press. Ignored while mounted — you are already on it. */
@@ -83,6 +107,34 @@ export class HorseAI {
     if (this.spookRecoverT > 0) this.spookRecoverT -= dt;
 
     const pos = this.horse.position;
+    this.holdYaw = null;
+
+    // ------------------------------------------------------ hitching post ---
+    if (this.hitch && !this.whistled) {
+      const playerToPost = Math.hypot(player.position.x - this.hitch.x, player.position.z - this.hitch.z);
+      const playerToHorse = this._distanceTo(player.position);
+      // The "walked off and left it" clause gates ENTERING the mode, not staying
+      // in it: once the animal is at the rail, standing next to it must not send
+      // it wandering off again, which is what an un-hystereticised test of this
+      // caught immediately (the horse arrived, the player was then 3m away, and
+      // the rule undid itself).
+      const engage = this.mode === 'hitched' || playerToHorse > HORSE.followSettleDistance;
+      if (playerToPost <= this.hitch.callRadius && engage) {
+        this.mode = 'hitched';
+        const d = Math.hypot(pos.x - this.hitch.x, pos.z - this.hitch.z);
+        if (d <= this.hitch.arriveDistance) {
+          this.holdYaw = this.hitch.yaw; // stand nose-in to the rail
+          outDir.set(0, 0, 0);
+          return 0;
+        }
+        outDir.set(this.hitch.x - pos.x, 0, this.hitch.z - pos.z).normalize();
+        return HORSE.approachSpeed;
+      }
+      if (this.mode === 'hitched') {
+        this.mode = 'wander';
+        this._pickWanderTarget(player.position);
+      }
+    }
 
     if (this.mode === 'coming') {
       if (this._distanceTo(player.position) < HORSE.whistleArriveDistance) {

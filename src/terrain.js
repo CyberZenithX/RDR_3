@@ -10,6 +10,13 @@
  * collision decision ("ground contact = raycast down onto the terrain mesh"):
  * it raycasts straight down onto the actual rendered mesh. Player grounding
  * must use this, not heightAt(), so it can never disagree with what is drawn.
+ *
+ * Since round 5 the two genuinely differ: `heightAt` is the dirt, and
+ * `groundHeightAt` also honours the town's FLOOR PLATES — the boardwalks and the
+ * saloon's floorboards, which stand `TOWN_BUILD.floorStep` above it. The seam
+ * has been a separately named function since round 1 for exactly this (ADR-001);
+ * this is the round that cashed it in. `heightAt` stays pure, so the terrain
+ * mesh, prop scatter and grass are unaffected.
  */
 
 import * as THREE from 'three';
@@ -161,5 +168,64 @@ export function buildTerrain(scene) {
  * town interiors with a floor height instead of terrain underneath.
  */
 export function groundHeightAt(x, z) {
-  return heightAt(x, z);
+  const h = heightAt(x, z);
+  if (_plates.length === 0) return h;
+  // One rejection for everything outside the town: the player, the horse and up
+  // to eleven bandits call this every frame, and almost every one of those calls
+  // is nowhere near a floorboard.
+  if (x < _plateBounds.minX || x > _plateBounds.maxX || z < _plateBounds.minZ || z > _plateBounds.maxZ) return h;
+  let best = h;
+  for (const p of _plates) {
+    if (p.y <= best) continue;
+    const dx = x - p.x;
+    const dz = z - p.z;
+    // World → plate space. Same convention as collision.js's box colliders and
+    // combat-ray.js's raycastBox: `rot` is the plate's own rotation about +Y,
+    // read the way `Object3D.rotation.y` is.
+    const lx = dx * p.cos - dz * p.sin;
+    const lz = dx * p.sin + dz * p.cos;
+    if (Math.abs(lx) <= p.hw && Math.abs(lz) <= p.hd) best = p.y;
+  }
+  return best;
 }
+
+// ------------------------------------------------------------ floor plates ---
+
+/** @type {{x:number,z:number,hw:number,hd:number,cos:number,sin:number,y:number}[]} */
+const _plates = [];
+const _plateBounds = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
+
+/**
+ * Registers a raised, walkable floor: a boardwalk plank, a shop's front step,
+ * the saloon's floorboards. `groundHeightAt` returns `y` over it instead of the
+ * dirt, so an agent walks up onto it with the ordinary ground snap and nothing
+ * else in the game has to know it happened.
+ *
+ * This is deliberately NOT a collider. A plate is a surface to stand on, not an
+ * obstacle: a 22cm step registered as a collider would be an invisible wall
+ * along the whole street frontage.
+ *
+ * @param {number} x centre X
+ * @param {number} z centre Z
+ * @param {number} w extent along the plate's own X
+ * @param {number} d extent along the plate's own Z
+ * @param {number} rot rotation about +Y, same sense as `Object3D.rotation.y`
+ * @param {number} y world Y of the walking surface
+ */
+export function addFloorPlate(x, z, w, d, rot, y) {
+  const plate = {
+    x, z, y, hw: w / 2, hd: d / 2,
+    cos: Math.cos(rot), sin: Math.sin(rot),
+  };
+  _plates.push(plate);
+  // A conservative AABB: the plate's own half-diagonal covers any rotation.
+  const reach = Math.hypot(plate.hw, plate.hd);
+  _plateBounds.minX = Math.min(_plateBounds.minX, x - reach);
+  _plateBounds.maxX = Math.max(_plateBounds.maxX, x + reach);
+  _plateBounds.minZ = Math.min(_plateBounds.minZ, z - reach);
+  _plateBounds.maxZ = Math.max(_plateBounds.maxZ, z + reach);
+  return plate;
+}
+
+/** Every registered plate, for smoke.mjs. */
+export const floorPlates = _plates;

@@ -76,8 +76,17 @@ function resolveCircle(pos, radius, c) {
 
 const _cos = Math.cos, _sin = Math.sin;
 
+/**
+ * `c.rot` is the box's own rotation about +Y, read exactly the way
+ * `Object3D.rotation.y` is — so a wall mesh and the collider that stands for it
+ * are written with the same number. (Until round 5 this function used the
+ * opposite sense; it had no caller, and the four cardinal yaws a town is built
+ * on cannot tell the two apart, so it was fixed rather than documented as a
+ * trap. `combat-ray.js`'s `raycastBox` and `terrain.js`'s floor plates use this
+ * same convention.)
+ */
 function resolveBox(pos, radius, c) {
-  const cosR = _cos(-c.rot), sinR = _sin(-c.rot);
+  const cosR = _cos(c.rot), sinR = _sin(c.rot);
   const dx = pos.x - c.x, dz = pos.z - c.z;
   // Rotate the agent into the box's local space.
   const lx = dx * cosR - dz * sinR;
@@ -97,8 +106,7 @@ function resolveBox(pos, radius, c) {
     nlz = lz >= 0 ? hd : -hd;
   }
 
-  // Rotate back to world space.
-  const cosB = _cos(c.rot), sinB = _sin(c.rot);
-  pos.x = c.x + nlx * cosB - nlz * sinB;
-  pos.z = c.z + nlx * sinB + nlz * cosB;
+  // Rotate back to world space (the inverse of the transform above).
+  pos.x = c.x + nlx * cosR + nlz * sinR;
+  pos.z = c.z - nlx * sinR + nlz * cosR;
 }

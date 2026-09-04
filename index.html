@@ -108,6 +108,25 @@
 
   #deathScreen { background: radial-gradient(ellipse at center, rgba(60, 10, 6, 0.5) 0%, rgba(10, 5, 3, 0.9) 100%); }
   #deathScreen h1 { color: #b5541f; }
+
+  /* Round 5's door transition. No CSS transition on this one: town.js drives the
+     opacity frame by frame off DOOR's own timings, and a CSS ease on top would
+     fight it. Hidden outright when clear, so it is not a full-screen layer the
+     compositor has to blend on every frame of normal play. */
+  #screenFade {
+    position: fixed; inset: 0; pointer-events: none; background: #000;
+    opacity: 0; visibility: hidden; z-index: 5;
+  }
+
+  /* The name of the place you have just walked into. */
+  #placeLabel {
+    position: fixed; left: 50%; top: 11vh; transform: translateX(-50%);
+    font: 600 13px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    letter-spacing: .16em; text-transform: uppercase; color: #e8d9b8;
+    text-shadow: 0 1px 4px #000; pointer-events: none;
+    opacity: 0; transition: opacity 0.5s ease;
+  }
+  #placeLabel.visible { opacity: 0.85; }
 </style>
 </head>
 <body>
@@ -123,6 +142,7 @@
   <p class="hint">WASD move &middot; Shift sprint &middot; Space jump &middot; H whistle horse &middot; E mount/dismount</p>
   <p class="hint">right mouse aim &middot; left mouse fire &middot; R reload &middot; mouse look &middot; Esc to release</p>
   <p class="hint">bandit camps are out past the ridge &mdash; two rounds drop a man, five drop you</p>
+  <p class="hint">the town is down the street &mdash; push through the saloon doors, and leave the horse at the rail</p>
 </div>
 
 <div id="damageFlash"></div>
@@ -136,6 +156,8 @@
 <div id="staminaBar"><div id="staminaFill"></div></div>
 <div id="crosshair"><i></i><i></i><i></i><i></i><i></i></div>
 <div id="ammo"><span id="ammoPips"></span><span id="ammoCount">6</span></div>
+<div id="placeLabel"></div>
+<div id="screenFade"></div>
 
 <script type="importmap">
 {

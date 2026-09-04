@@ -29,11 +29,14 @@ and **fails the run on any** of:
 
 then runs the `CHECKS` array against `window.__debug`.
 
-**Headless is slow, and that's the environment, not the game.** ~3fps in
-chromium's software rasterizer with the full 2048 `PCFSoftShadowMap`. The
-shadow map was **not** reduced — 2048 soft shadows is a completely normal
-budget on a real GPU (BUILD-PLAN.md's own "2048 max"). The frame-target
-timeout was raised to 45s instead. One `CONTEXT_LOST_WEBGL` warning has been
+**Headless is slow, and that's the environment, not the game.** ~2.7fps in
+chromium's software rasterizer with the full 2048 `PCFSoftShadowMap` — it was
+~3fps before round 5's town added three `PointLight`s, which every standard
+material in the scene then evaluates per fragment. The shadow map was **not**
+reduced — 2048 soft shadows is a completely normal budget on a real GPU
+(BUILD-PLAN.md's own "2048 max"). The frame-target timeout was raised instead:
+45s in round 2, and **60s** in round 5 after one run missed it on a loaded
+machine (sixty frames at 2.7fps is 22s; the headroom is the point). One `CONTEXT_LOST_WEBGL` warning has been
 seen under sustained headless load; it didn't recur and doesn't fail the run
 (it's a `warning`-type message, and headless GL driver noise was already
 established as ignorable in round 0 with "GPU stall due to ReadPixels").
@@ -180,6 +183,14 @@ Pick a bone no clip translates, or measure a large angle instead.
    time was to put both bodies on the town plateau (flat by construction,
    prop-free by `PROPS.townKeepOut`) or back at their camp, and *then* measure.
 
+6a. **An `activeRadius` gate is part of the staging.** Round 5 repeated round
+   4's mistake exactly: a townsfolk-wander check parked the player 400m away so
+   nobody would be *watching* them, and read back "nobody moved in 30 seconds".
+   Past `TOWNSFOLK.activeRadius` nobody is ticked at all, so the check was
+   measuring the freeze, not the wander. Park the observer **out of the
+   behaviour's own range but inside the activation radius**, and say which is
+   which in the comment.
+
 6b. **Freezing a system is a legitimate stage.** `bandits.update = () => {}`
    around a measurement, restored after, is the same recipe round 2c uses on
    `horse._updateMounted`. But freeze the *whole* object: round 4's
@@ -187,6 +198,21 @@ Pick a bone no clip translates, or measure a large angle instead.
    forgot its collider, so the infinitely tall cylinder it was meant to be
    ignoring stayed back at camp — and the check passed with the fix reverted.
    A staged object usually has more than one piece.
+
+---
+
+### A check that walks the route finds what a check that measures cannot
+
+Round 5's "walk in through the saloon door" check takes sixty 10cm steps at the
+doorway, calling `resolveCollisions` each step exactly as `player.js` does, and
+asserts it ends up inside. It failed immediately — and the bug was not in the
+saloon at all. A street lamp stood dead centre of the doorway and the hitching
+rail ran across it, so the approach was blocked by the round's own street
+furniture. Nothing about the layout looked wrong in a screenshot; a lamp and a
+rail were exactly where a lamp and a rail belong.
+
+**Simulate the thing a player does, not the thing you built.** The same check
+written as "assert the doorway gap is wider than the player" would have passed.
 
 ---
 
@@ -394,6 +420,45 @@ The last three sample the arc from **inside** the render loop.
   Stratifying bounds the worst gap at 1.7x the average *by construction*,
   which is why the threshold can be 1.9x and mean something. Reverting fails
   three runs out of three
+
+**Round 5 — the town**
+
+- ten hand-placed buildings, all five that BUILD-PLAN.md names by name, every
+  footprint on flat plateau (height spread sampled over its own corners) and
+  inside `TOWN.halfSize`
+- the whole town is **two** meshes (opaque + glass) carrying vertex colours,
+  which is ADR-033's draw-call discipline asserted structurally rather than by
+  watching a number — plus a third draw-call budget sample, down the main street
+- **a box collider pushes an agent out along its own axes**, tested at a
+  deliberately NON-cardinal yaw. `resolveBox`'s first caller in four rounds,
+  and the only thing that can see a sign error in the rotation convention:
+  every building sits at 0, ±π/2 or π, where a box is too symmetric to tell.
+  Confirmed to fail with the old sign ("pushed to local z=0.732, still inside")
+- **you can walk in through the saloon door** — sixty 10cm steps through the
+  real `resolveCollisions`, which is what caught a lamp post standing in the
+  doorway — and the floor inside reads `TOWN.height + floorStep` while the dirt
+  under it still reads `TOWN.height`, with open terrain 350m away unaffected
+- **a shot inside the saloon stops at the wall**, in all four directions, fired
+  from off the doorway lane (a ray straight out of the open door correctly hits
+  the street). Confirmed to fail with the box branch reverted: "hit null at
+  Infinity" — the round went through the wall and out into the desert
+- **the camera does not walk through a saloon wall** either, read off `snap()`
+  (which recomputes the occlusion distance itself, so this needs no frames),
+  with a control reading in the open street. Confirmed to fail reverted
+- the door trigger fades to black and back on the way in and on the way out,
+  driven at a fixed step because the whole cycle is 0.58s
+- **townsfolk are independent bodies with their own materials** — separate
+  `Skeleton`s and `Bone`s, shared geometry, and *no* shared material, which is
+  what makes the per-person tint safe (ADR-034). Also that none is visibly armed
+- they stroll a short patrol, stay inside `patrolRadius` of their anchor, do
+  not watch a player who is far away, and stop and turn to face one who is close
+- a townsperson is hit at chest height and missed two metres over their hat,
+  their collider is in combat's ignore set, and two rounds put them down and
+  unregister them
+- **the horse takes itself to the hitching rail** and settles facing it, and a
+  whistle in town is not overridden by the rail
+- street lamps: one glow instance per post, `setLit(false)`/`(true)` really
+  darkens and relights, and every lamp collider carries a finite `top`
 
 Two recipes worth reusing:
 

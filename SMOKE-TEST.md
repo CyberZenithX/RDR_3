@@ -732,3 +732,45 @@ geometry; these are the things only a person can judge.
    changes" puts only what you altered on the clipboard and in the console.
    It is debug-only — check it is not visible until you press F2, and that
    nothing on it is required to play.
+
+---
+
+## Round 5 — the town
+
+9. **The street reads as a town.** Walk down from spawn: two rows of buildings
+   with boardwalks, false fronts and signs, the church closing the far end with
+   the mesa behind it. Watch for a building that looks stamped on the ground
+   rather than standing on it, a roof that does not meet its walls, or a gap
+   between a boardwalk and the dirt.
+10. **The saloon.** Walk in through the batwing doors — no gap you have to aim
+    for, no invisible wall, and no step you trip on. Inside: a bar with bottles,
+    tables and stools, and enough light to see them by. **The two things to
+    judge:** whether the fade in and out reads as a transition or as an
+    interruption (`DOOR.enabled = false` switches it off; `DOOR.fadeOut` /
+    `fadeIn` shorten it), and whether the interior is *dim* or actually *dark*
+    (`LAMPS.points` — intensity and height, and see DEVELOPMENT-NOTES.md for why
+    the first values were wrong by a factor of eight).
+11. **The camera indoors.** Stand in the middle of the saloon and turn a full
+    circle, then walk into each corner. The camera should pull in against the
+    walls, never end up outside the building looking at the back of one.
+12. **Shooting indoors and out.** Fire at a saloon wall from inside: the spark
+    should be on the wall, and nothing should be hit outside. Then fire *out*
+    through the doorway, which should carry on down the street.
+13. **The horse at the rail.** Ride into town, dismount anywhere on the street,
+    walk toward the saloon. The horse should take itself to the hitching rail
+    and stand there facing it — not follow you, not wander into a building.
+    Whistle it while you are in town: it should come to you and **stay**. Watch
+    for it grinding along a wall on the way; it has no obstacle avoidance and
+    the town is the first place that could matter.
+14. **Townsfolk.** They should stroll a few metres, stop, stroll again — not
+    march, not stand rigid, not walk into walls. Walk past one: they should stop
+    and turn to watch you go by. **Judge whether they read as five different
+    people or as five copies of you** — each is tinted, and `TOWNSFOLK.tints` is
+    the lever if the difference is too subtle to see.
+15. **Firing in town.** One shot should send every citizen within earshot
+    running. Shooting one is possible and deliberate (round 6's wanted level is
+    built on it) — check the body falls and settles rather than sinking or
+    T-posing, and that nothing else in the street breaks.
+16. **The boardwalks.** Step up onto one and back off. It should feel like a
+    step, not a teleport or a bounce, and your feet should be on the boards
+    rather than in them. Same on the church's front steps.

@@ -23,6 +23,7 @@ All three are **Quaternius, CC0 1.0**.
 | File | Source model | Origin | KB | Meshes | Skins |
 |---|---|---|---|---|---|
 | `models/player.glb` | "Farmer" (Ultimate Modular Men Pack) | `poly.pizza/m/7pn3R6hPvE` | 1338 | 4 | 4 |
+| | *Round 5's **townsfolk** load this a second time and clone a rig per citizen, exactly as the bandits do. There is no third humanoid to fetch, and dressing the town in the enemy silhouette would read as five bandits standing in the street (ADR-034). Each body clones its own **materials** and tints them — safe here and forbidden on a bandit, because a townsperson owns its copies and eleven bandits share one.* | | | | |
 | `models/bandit.glb` | "Punk" (Ultimate Modular Men Pack) | `poly.pizza/m/BTALZymknF` | 1342 | 4 | 4 |
 | | *Round 4 loads this **once** and clones a rig per bandit (`src/rig-clone.js`, ADR-029) — eleven men, one download, one set of GPU buffers. Geometry and materials are shared by reference, so **nothing may recolour a bandit's material in place**.* | | | | |
 | `models/horse.glb` | "Horse" (Animated Animal Pack) | `poly.pizza/m/qvTrSG9pZF` | 1082 | 1 | 1 |

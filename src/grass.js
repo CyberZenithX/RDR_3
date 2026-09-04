@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { heightAt, normalAt } from './terrain.js';
 import { GRASS, TOWN, WORLD, COLORS } from './config.js';
+import { STREET } from './config-town.js';
 
 const GRASS_SEED = WORLD.seed + 707;
 
@@ -107,6 +108,11 @@ function recenterGrass(state, playerPos) {
       if (Math.abs(x - TOWN.centerX) < TOWN.halfSize && Math.abs(z - TOWN.centerZ) < TOWN.halfSize) {
         keepProb *= GRASS.townDensityFactor;
       }
+      // Round 5: nothing grows on a packed dirt street or under a boardwalk.
+      // A rectangle rather than a per-building footprint test — this runs for
+      // every candidate cell on every recentre, and a main street is a rectangle.
+      const k = STREET.grassKeepOut;
+      if (Math.abs(x) < k.halfX && z > k.minZ && z < k.maxZ) continue;
       if (hash01(ci, cj, 3) > keepProb) continue;
 
       placements.push({

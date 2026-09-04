@@ -659,6 +659,74 @@ contrast rather than size. Every one of the three failures above was found by
 taking a screenshot from the distance the feature is *for* — not from where it
 was convenient to stand.
 
+## The saloon's door was blocked by its own street furniture
+
+**Symptom.** A new smoke check walked sixty 10cm steps straight at the saloon
+doorway, resolving collisions each step exactly as `player.js` does, and ended
+back where it started: `still outside the saloon`.
+
+**Cause.** Two of round 5's own props sat on the doorway's lane. A street lamp
+stood at (-8.6, 16) — dead centre of the door — and the hitching rail ran from
+z 12 to 20 across it. The lamp's collider plus the player's radius is 0.6m, and
+walking through its centre line meant being pushed back out every step, forever.
+
+**Fix.** Move the lamp to z=10 and the rail (and its trough) north to z 20.5–27.5,
+so the whole run of the frontage from z 14 to 18 carries no collider at all.
+
+**Lesson.** *A door is a lane, not a point.* The first thing in this game with an
+inside is also the first thing with an approach, and every collider you place on
+a street has to be checked against it. Nothing in the layout looked wrong in a
+screenshot — the lamp and the rail are exactly where a lamp and a rail belong.
+Only walking it found the problem, which is the whole argument for a check that
+simulates the walk rather than measuring the geometry.
+
+---
+
+## The hitching post un-hitched itself when you stood next to it
+
+**Symptom.** The horse walked to the rail and then, on arriving, went back to
+`wander` and left again. The check read `mode "wander" instead of hitched`.
+
+**Cause.** The rule was *"the player is near the post AND more than
+`followSettleDistance` away from the horse"* — deliberately, so that whistling
+the animal over in the street would not be instantly undone by it walking back to
+the rail. But the same clause was being evaluated every frame, including after
+arrival: the horse parks at the rail, the player is standing three metres from
+the rail, and the condition that put it there stops being true.
+
+**Fix.** The distance clause gates **entering** the mode, not staying in it:
+`const engage = this.mode === 'hitched' || playerToHorse > followSettleDistance`.
+
+**Lesson.** *A condition written to describe a transition will describe a state
+if you let it.* The clause was correct for "should it set off?" and wrong for
+"should it stay?", and a state machine evaluated per frame cannot tell the two
+apart unless you write the hysteresis in.
+
+---
+
+## The saloon was a black box
+
+**Symptom.** The first interior screenshot showed a room with two blown-out
+discs on the ceiling and nothing else legible — the bar, the tables and the floor
+were all essentially black.
+
+**Cause.** three r160 runs with `useLegacyLights = false`, so a `PointLight`'s
+intensity is in candela and falls off as 1/d². The lights were hung at y=3.0
+under a 3.4m ceiling at intensity 5.5: forty centimetres above them the ceiling
+received 5.5/0.16 ≈ 34, and the floor 2.8m below received 5.5/7.8 ≈ 0.7 against a
+sun of 2.5.
+
+**Fix.** Hang them lower (2.6) and burn much harder (40), with a short
+`distance` — these lights cast no shadow, so their cutoff sphere is the only
+thing stopping them lighting the street straight through the wall.
+
+**Lesson.** *Check which light model the renderer is actually running.* An
+intensity that looks reasonable next to a `DirectionalLight`'s is not, because
+one is attenuated and the other is not; and the inverse square means the
+distance from a lamp to its own ceiling is the number that decides the exposure.
+
+---
+
 ## Two harness bugs that produced false passes
 
 Both live in [TESTING.md](TESTING.md) because they will bite the next check

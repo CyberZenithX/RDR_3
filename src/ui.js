@@ -22,6 +22,8 @@ export function initUI() {
   const healthBar = document.getElementById('health');
   const damageFlash = document.getElementById('damageFlash');
   const deathScreen = document.getElementById('deathScreen');
+  const screenFade = document.getElementById('screenFade');
+  const placeLabel = document.getElementById('placeLabel');
   let boundaryOpacity = 0;
 
   // One pip per chamber, built from COMBAT.magazine so a bigger cylinder is
@@ -51,6 +53,8 @@ export function initUI() {
   let shownHealth = -1;
   let shownDead = null;
   let shownFlash = -1;
+  let shownFade = -1;
+  let shownPlace = undefined;
 
   return {
     setLoadingText(text) {
@@ -125,6 +129,30 @@ export function initUI() {
       if (opacity === shownFlash) return;
       shownFlash = opacity;
       damageFlash.style.opacity = String(opacity);
+    },
+
+    /**
+     * Round 5's door transition. `opacity` is town.js's 0..1 fade — guarded on
+     * the value changing, like the ammo pips, because this runs every frame and
+     * is 0 for almost all of them.
+     */
+    updateScreenFade(opacity) {
+      if (!screenFade) return;
+      const v = Math.round(opacity * 1000) / 1000;
+      if (v === shownFade) return;
+      shownFade = v;
+      screenFade.style.opacity = String(v);
+      // Taken out of the compositing path entirely when clear, rather than left
+      // as a full-screen transparent layer over every frame of the game.
+      screenFade.style.visibility = v > 0.001 ? 'visible' : 'hidden';
+    },
+
+    /** The name of the place you are standing in, or null. */
+    setPlaceName(name) {
+      if (!placeLabel || name === shownPlace) return;
+      shownPlace = name;
+      placeLabel.textContent = name ?? '';
+      placeLabel.classList.toggle('visible', !!name);
     },
 
     setDead(dead) {

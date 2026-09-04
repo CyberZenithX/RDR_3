@@ -165,11 +165,15 @@ console.log(`smoke: loading http://localhost:${PORT}/`);
 await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'load', timeout: 30000 });
 
 // The render loop must actually start and keep going. Timeout is generous
-// (45s) because headless chromium's software rasterizer renders a 2048
+// (60s) because headless chromium's software rasterizer renders a 2048
 // PCFSoftShadowMap far slower than any real GPU does — measured ~3fps here
-// vs. 60fps target on real hardware. See docs/TESTING.md.
+// (~2.7 since round 5's town added three PointLights, which every standard
+// material in the scene then evaluates per fragment) vs. 60fps target on real
+// hardware. Raised from 45s in round 5 after one run missed it on a loaded
+// machine: 60 frames at 2.7fps is 22s, and the headroom is the point. See
+// docs/TESTING.md.
 try {
-  await page.waitForFunction((n) => window.__frames > n, FRAME_TARGET, { timeout: 45000 });
+  await page.waitForFunction((n) => window.__frames > n, FRAME_TARGET, { timeout: 60000 });
 } catch {
   problems.push(`render loop never reached ${FRAME_TARGET} frames`);
 }
@@ -2207,6 +2211,13 @@ const CHECKS = [
   }],
 
   ['five hits drop the player, and respawn puts them back whole', async () => {
+    // A reload or a fire cooldown left in flight by an earlier check is not this
+    // check's subject, and it will fail the "a respawned player can fire" half
+    // for the wrong reason. At headless's ~2.7fps a 2.2s reload is sixteen real
+    // seconds of wall clock (docs/TESTING.md gotcha 2b), so waiting on the gun
+    // being ready is not optional — this failed exactly that way in round 5,
+    // where the town cost enough frame rate to widen the window.
+    await page.waitForFunction(() => window.__debug.combat.canFire, null, { timeout: 60000 });
     const info = await page.evaluate(async () => {
       const { HEALTH } = await import('/src/config-ai.js');
       const d = window.__debug;
@@ -2483,6 +2494,536 @@ const CHECKS = [
     if (!(info.mountedHip > info.hip)) {
       return `hip fire from the saddle (${info.mountedHip}) is no less accurate than on foot (${info.hip})`;
     }
+    return null;
+  }],
+
+  // Round 5 — the town --------------------------------------------------------
+  ['the town stands on the plateau, inside its reserved square', async () => {
+    const info = await page.evaluate(async () => {
+      const { TOWN } = await import('/src/config.js');
+      const { BUILDINGS } = await import('/src/config-town.js');
+      const { heightAt } = await import('/src/terrain.js');
+      const t = window.__debug.town;
+      const rows = t.buildings.map((b) => {
+        // heightAt over the footprint's own corners and centre: the plateau is
+        // supposed to be dead flat here, and a building on a slope is the exact
+        // failure round 1 reserved this square to prevent.
+        const hw = b.spec.w / 2;
+        const hd = b.spec.d / 2;
+        const cos = Math.cos(b.yaw);
+        const sin = Math.sin(b.yaw);
+        let min = Infinity;
+        let max = -Infinity;
+        let worstX = 0;
+        let worstZ = 0;
+        for (const lx of [-hw, 0, hw]) {
+          for (const lz of [-hd, 0, hd]) {
+            const x = b.cx + lx * cos + lz * sin;
+            const z = b.cz - lx * sin + lz * cos;
+            min = Math.min(min, heightAt(x, z));
+            max = Math.max(max, heightAt(x, z));
+            worstX = Math.max(worstX, Math.abs(x));
+            worstZ = Math.max(worstZ, Math.abs(z));
+          }
+        }
+        return { kind: b.spec.kind, spread: max - min, worstX, worstZ, base: min };
+      });
+      return { rows, halfSize: TOWN.halfSize, height: TOWN.height, specced: BUILDINGS.length };
+    });
+    if (info.rows.length < 10) return `only ${info.rows.length} buildings, BUILD-PLAN.md asks for ~10`;
+    if (info.rows.length !== info.specced) return `${info.rows.length} built from ${info.specced} specs`;
+    const named = ['saloon', 'stable', 'sheriff', 'gunsmith', 'church'];
+    const missing = named.filter((k) => !info.rows.some((r) => r.kind === k));
+    if (missing.length) return `BUILD-PLAN.md names these and they are missing: ${missing.join(', ')}`;
+    for (const r of info.rows) {
+      if (r.spread > 0.05) return `the ${r.kind} sits on ${r.spread.toFixed(2)}m of height spread — that is a hillside, not the plateau`;
+      if (Math.abs(r.base - info.height) > 0.05) return `the ${r.kind}'s ground is ${r.base.toFixed(2)}, not TOWN.height ${info.height}`;
+      if (r.worstX > info.halfSize || r.worstZ > info.halfSize) {
+        return `the ${r.kind} reaches (${r.worstX.toFixed(0)}, ${r.worstZ.toFixed(0)}), outside TOWN.halfSize ${info.halfSize}`;
+      }
+    }
+    return null;
+  }],
+
+  ['the town is two merged meshes, not one per building', async () => {
+    // The draw-call discipline docs/ROADMAP.md asked for, asserted structurally
+    // rather than by watching the number: ten buildings, eight lamps, the
+    // boardwalks, the rail and a saloon's furniture all land in ONE opaque mesh
+    // plus one for the glass. See town-geo.js.
+    const info = await page.evaluate(() => {
+      const t = window.__debug.town;
+      let named = 0;
+      window.__debug.scene.traverse((o) => { if (o.isMesh && o.name.startsWith('town')) named++; });
+      return {
+        named,
+        verts: t.mesh ? t.mesh.geometry.attributes.position.count : 0,
+        hasColor: !!t.mesh?.geometry.attributes.color,
+        vertexColors: !!t.mesh?.material.vertexColors,
+        glass: !!t.glassMesh,
+      };
+    });
+    if (info.named !== 2) return `${info.named} meshes named "town*" — expected exactly 2 (opaque + glass)`;
+    if (!(info.verts > 2000)) return `the merged town mesh has only ${info.verts} vertices — the merge dropped most of it`;
+    if (!info.hasColor || !info.vertexColors) return 'the merged mesh has no vertex colours, so every part would render white';
+    if (!info.glass) return 'no glass mesh — the windows did not merge';
+    return null;
+  }],
+
+  ['a building wall pushes you out, on its own axes', async () => {
+    // resolveBox's FIRST REAL CALLER, four rounds after it was written. The test
+    // box is deliberately at a NON-cardinal yaw: every building in town sits at
+    // 0, +-PI/2 or PI, and a box is symmetric enough that those four angles
+    // cannot tell a sign error in the rotation convention from a correct one.
+    // This one can, and it is what guards `rot` meaning the same thing as
+    // `Object3D.rotation.y` across collision.js, combat-ray.js and terrain.js.
+    const info = await page.evaluate(async () => {
+      const { addBoxCollider, removeCollider, resolveCollisions, colliders } = await import('/src/collision.js');
+      const rot = 0.6;
+      const c = addBoxCollider(300, 300, 6, 2, rot, { kind: 'test' });
+      const radius = 0.3;
+      const cos = Math.cos(rot);
+      const sin = Math.sin(rot);
+      // Just inside the box, off the middle along its own local +Z.
+      const pos = { x: 300 + 0.3 * sin, z: 300 + 0.3 * cos };
+      resolveCollisions(pos, radius, null);
+      const dx = pos.x - 300;
+      const dz = pos.z - 300;
+      const lx = dx * cos - dz * sin;
+      const lz = dx * sin + dz * cos;
+      const boxes = colliders.filter((k) => k.type === 'box' && k.meta?.kind === 'building').length;
+      removeCollider(c);
+      return { lx, lz, boxes };
+    });
+    if (info.boxes === 0) return 'no building registered a box collider — resolveBox still has no caller';
+    if (Math.abs(info.lz) < 1.29) return `pushed to local z=${info.lz.toFixed(3)}, still inside the box (needs >= 1.3)`;
+    if (Math.abs(info.lx) > 3.3) return `pushed out along the wrong axis: local x=${info.lx.toFixed(3)}`;
+    return null;
+  }],
+
+  ['you can walk in through the saloon door, and its floor is above the dirt', async () => {
+    const info = await page.evaluate(async () => {
+      const { resolveCollisions } = await import('/src/collision.js');
+      const { heightAt, groundHeightAt, floorPlates } = await import('/src/terrain.js');
+      const { PLAYER, TOWN } = await import('/src/config.js');
+      const { TOWN_BUILD } = await import('/src/config-town.js');
+      const t = window.__debug.town;
+      const s = t.saloon;
+      const cos = Math.cos(s.yaw);
+      const sin = Math.sin(s.yaw);
+      // The front faces (-sin, -cos); walking IN is the opposite of that.
+      const inward = { x: sin, z: cos };
+      const pos = {
+        x: s.cx + (-(s.spec.d / 2) - 1.6) * sin,
+        z: s.cz + (-(s.spec.d / 2) - 1.6) * cos,
+      };
+      // 60 x 10cm steps straight at the doorway, resolving collisions each step,
+      // which is exactly what player.js does every frame.
+      for (let i = 0; i < 60; i++) {
+        pos.x += inward.x * 0.1;
+        pos.z += inward.z * 0.1;
+        resolveCollisions(pos, PLAYER.radius);
+      }
+      return {
+        got: t.isInsideSaloon(pos.x, pos.z),
+        end: { x: pos.x, z: pos.z },
+        floor: groundHeightAt(s.cx, s.cz),
+        dirt: heightAt(s.cx, s.cz),
+        expectedFloor: TOWN.height + TOWN_BUILD.floorStep,
+        openGroundSame: groundHeightAt(280, -260) === heightAt(280, -260),
+        plates: floorPlates.length,
+      };
+    });
+    if (!info.got) return `walking at the doorway ended at (${info.end.x.toFixed(1)}, ${info.end.z.toFixed(1)}), still outside the saloon`;
+    if (Math.abs(info.floor - info.expectedFloor) > 0.001) {
+      return `the saloon floor reads ${info.floor.toFixed(3)}, expected ${info.expectedFloor.toFixed(3)}`;
+    }
+    if (!(info.floor > info.dirt + 0.1)) return `groundHeightAt (${info.floor}) is not above heightAt (${info.dirt}) inside the saloon`;
+    if (!info.openGroundSame) return 'a floor plate is leaking into open terrain 350m from town';
+    if (info.plates < 10) return `only ${info.plates} floor plates registered`;
+    return null;
+  }],
+
+  ['a shot inside the saloon stops at the wall', async () => {
+    // docs/ROADMAP.md flagged this before the round started: "A shot fired
+    // inside the saloon will go straight through the walls until that is
+    // written." raycastColliders skipped boxes outright. ADR-032.
+    const info = await page.evaluate(async () => {
+      const THREE = await import('three');
+      const { makeHit, resetHit, raycastColliders, raycastTerrain } = await import('/src/combat-ray.js');
+      const t = window.__debug.town;
+      const s = t.saloon;
+      const out = makeHit();
+      // NOT the middle of the room: the doorway is a real hole in the front wall
+      // and a ray straight out of it correctly hits the street. Offset along the
+      // frontage and into the depth so all four cardinal directions meet a wall.
+      const cos = Math.cos(s.yaw);
+      const sin = Math.sin(s.yaw);
+      const origin = new THREE.Vector3(
+        s.cx + 3 * cos + 2 * sin, t.saloonFloorY + 1.3, s.cz - 3 * sin + 2 * cos,
+      );
+      const results = {};
+      for (const [name, dx, dz] of [['+x', 1, 0], ['-x', -1, 0], ['+z', 0, 1], ['-z', 0, -1]]) {
+        const dir = new THREE.Vector3(dx, 0, dz).normalize();
+        resetHit(out);
+        raycastColliders(origin, dir, 200, null, out);
+        raycastTerrain(origin, dir, 200, out);
+        results[name] = { kind: out.kind, distance: out.distance };
+      }
+      return results;
+    });
+    for (const [dirName, r] of Object.entries(info)) {
+      if (r.kind !== 'building') return `a shot ${dirName} out of the saloon hit "${r.kind}" at ${r.distance.toFixed(1)}m, not a wall`;
+      if (!(r.distance > 1 && r.distance < 15)) return `the ${dirName} wall was reported ${r.distance.toFixed(1)}m away — that is not inside a room 18m by 14m`;
+    }
+    return null;
+  }],
+
+  ['the saloon door trigger fades in and out', async () => {
+    // Driven at a fixed step rather than by wall clock: DOOR's whole cycle is
+    // 0.58s and headless renders at ~2.7fps, so polling from node would step
+    // straight over it (docs/TESTING.md gotcha 2b).
+    const info = await page.evaluate(async () => {
+      const { DOOR } = await import('/src/config-town.js');
+      const d = window.__debug;
+      const t = d.town;
+      const s = t.saloon;
+      const p = d.player;
+      const saved = { x: p.position.x, y: p.position.y, z: p.position.z };
+      const cos = Math.cos(s.yaw);
+      const sin = Math.sin(s.yaw);
+      const at = (lz) => ({ x: s.cx + lz * sin, z: s.cz + lz * cos });
+      const outside = at(-(s.spec.d / 2) - 2);
+      const inside = at(0);
+
+      // Settle outside, and let any fade in flight finish.
+      p.position.set(outside.x, t.saloonFloorY, outside.z);
+      for (let i = 0; i < 120; i++) t.update(1 / 60, p);
+      const before = { inside: t.inside, fade: t.fade };
+
+      // Step in.
+      p.position.set(inside.x, t.saloonFloorY, inside.z);
+      let peak = 0;
+      for (let i = 0; i < 60; i++) { t.update(1 / 60, p); peak = Math.max(peak, t.fade); }
+      const entered = { inside: t.inside, place: t.placeName, peak };
+      for (let i = 0; i < 120; i++) t.update(1 / 60, p);
+      const settled = t.fade;
+
+      // Step out.
+      p.position.set(outside.x, t.saloonFloorY, outside.z);
+      let peakOut = 0;
+      for (let i = 0; i < 60; i++) { t.update(1 / 60, p); peakOut = Math.max(peakOut, t.fade); }
+      const left = { inside: t.inside, place: t.placeName, peakOut };
+      for (let i = 0; i < 120; i++) t.update(1 / 60, p);
+
+      p.position.set(saved.x, saved.y, saved.z);
+      return { before, entered, left, settled, max: DOOR.maxOpacity, enabled: DOOR.enabled };
+    });
+    if (!info.enabled) return 'DOOR.enabled is false, so the trigger is switched off';
+    if (info.before.inside) return 'standing on the boardwalk already counts as being inside the saloon';
+    if (!info.entered.inside) return 'stepping into the middle of the saloon did not register as inside';
+    if (info.entered.place !== 'The Iron Horse') return `place label read ${JSON.stringify(info.entered.place)}`;
+    if (!(info.entered.peak >= info.max - 0.001)) return `entering only faded to ${info.entered.peak.toFixed(2)} of ${info.max}`;
+    if (!(info.settled < 0.001)) return `the fade never cleared — it settled at ${info.settled.toFixed(3)}`;
+    if (info.left.inside) return 'stepping back out onto the boardwalk still reads as inside';
+    if (info.left.place !== null) return `the place label stuck at ${JSON.stringify(info.left.place)} after leaving`;
+    if (!(info.left.peakOut >= info.max - 0.001)) return `leaving only faded to ${info.left.peakOut.toFixed(2)}`;
+    return null;
+  }],
+
+  ['townsfolk are independent bodies with their own materials', async () => {
+    const info = await page.evaluate(() => {
+      const people = window.__debug.town.townsfolk.people;
+      if (people[0]?.character.isPlaceholder) return { placeholder: true };
+      const skeletons = new Set();
+      const bones = new Set();
+      const geometries = new Set();
+      const materials = [];
+      for (const p of people) {
+        p.character.root.traverse((o) => {
+          if (o.isSkinnedMesh) {
+            skeletons.add(o.skeleton);
+            geometries.add(o.geometry);
+            for (const b of o.skeleton.bones) bones.add(b);
+          }
+          if (o.isMesh && o.material && !Array.isArray(o.material)) materials.push(o.material);
+        });
+      }
+      let meshCount = 0;
+      people[0].character.root.traverse((o) => { if (o.isSkinnedMesh) meshCount++; });
+      return {
+        people: people.length,
+        skeletons: skeletons.size,
+        bones: bones.size,
+        geometries: geometries.size,
+        sharedMaterials: materials.length - new Set(materials).size,
+        meshCount,
+        armed: people.some((p) => p.character.weapon?.group.visible),
+      };
+    });
+    if (info.placeholder) { console.log('  (info) townsfolk are capsule placeholders — skipping the clone assertions'); return null; }
+    if (info.people < 4) return `only ${info.people} townsfolk — a street needs a few`;
+    if (info.skeletons < info.people) return `${info.people} townsfolk share ${info.skeletons} Skeleton objects — they would move as one body`;
+    if (info.bones < info.people * 2) return `${info.bones} distinct bones across ${info.people} bodies — the rebind did not happen`;
+    if (info.geometries > info.meshCount) return `geometry is not shared: ${info.geometries} buffers for ${info.meshCount} meshes per body`;
+    if (info.sharedMaterials > 0) return `${info.sharedMaterials} materials are shared between townsfolk — one tint would recolour more than one body`;
+    if (info.armed) return 'a townsperson is carrying a visible revolver';
+    return null;
+  }],
+
+  ['townsfolk stroll a short patrol and turn to look at you', async () => {
+    // Driven at a fixed step: the stroll/pause cycle is seconds long and
+    // headless buys ~0.045s of sim per real second (gotcha 2b).
+    const info = await page.evaluate(async () => {
+      const { TOWNSFOLK } = await import('/src/config-town.js');
+      const d = window.__debug;
+      const folk = d.town.townsfolk;
+      const p = d.player;
+      const saved = { x: p.position.x, y: p.position.y, z: p.position.z };
+
+      // Phase one: the player out of LOOK range but still inside
+      // TOWNSFOLK.activeRadius, so nobody is watching and yet everyone is still
+      // being ticked. Parking them 400m away instead is the exact trap round 4
+      // hit with bandits: past activeRadius nobody updates at all, and the check
+      // reads "nobody moved" as a bug in the wander it never ran.
+      p.position.set(55, 40, 55);
+      const from = folk.people.map((q) => ({ x: q.position.x, z: q.position.z }));
+      for (let i = 0; i < 1800; i++) folk.update(1 / 60, p);
+      const moved = folk.people.map((q, i) => Math.hypot(q.position.x - from[i].x, q.position.z - from[i].z));
+      const strayed = folk.people.map((q) => Math.hypot(q.position.x - q.anchor.x, q.position.z - q.anchor.z));
+      const watchedWhileAway = folk.people.filter((q) => q.state === 'watch').length;
+
+      // Phase two: stand next to one and see if they turn round.
+      const target = folk.people.find((q) => q.alive);
+      p.position.set(target.position.x + 3, target.position.y, target.position.z);
+      for (let i = 0; i < 180; i++) folk.update(1 / 60, p);
+      // yaw 0 faces -Z, the shared convention.
+      const facingX = -Math.sin(target.yaw);
+      const facingZ = -Math.cos(target.yaw);
+      const dx = p.position.x - target.position.x;
+      const dz = p.position.z - target.position.z;
+      const len = Math.max(1e-6, Math.hypot(dx, dz));
+      const dot = (dx / len) * facingX + (dz / len) * facingZ;
+
+      p.position.set(saved.x, saved.y, saved.z);
+      for (let i = 0; i < 30; i++) folk.update(1 / 60, p);
+      return {
+        moved, strayed, watchedWhileAway, dot,
+        state: target.state, speed: target.speed,
+        patrolRadius: TOWNSFOLK.patrolRadius,
+      };
+    });
+    if (info.watchedWhileAway > 0) return `${info.watchedWhileAway} townsfolk were watching a player 400m away`;
+    if (!info.moved.some((m) => m > 1)) return `nobody moved in 30s of simulation (max ${Math.max(...info.moved).toFixed(2)}m)`;
+    const worst = Math.max(...info.strayed);
+    if (worst > info.patrolRadius + 2.5) return `someone wandered ${worst.toFixed(1)}m from their anchor, past patrolRadius ${info.patrolRadius}`;
+    if (info.state !== 'watch') return `standing 3m away left them in "${info.state}" rather than watching`;
+    if (info.speed > 0.2) return `they kept walking (${info.speed.toFixed(2)} m/s) instead of stopping to look`;
+    if (!(info.dot > 0.9)) return `they are not facing the player: facing-dot ${info.dot.toFixed(3)}`;
+    return null;
+  }],
+
+  ['a townsperson can be shot, but not through their hat', async () => {
+    // The same `top: Infinity` trap round 4 found on bandits, plus the round-6
+    // foundation docs/ROADMAP.md asked for: an innocent with health, not a prop.
+    // Runs LAST of the townsfolk checks, because it leaves a body in the street.
+    const info = await page.evaluate(async () => {
+      const THREE = await import('three');
+      const { makeHit, resetHit } = await import('/src/combat-ray.js');
+      const { TOWNSFOLK } = await import('/src/config-town.js');
+      const folk = window.__debug.town.townsfolk;
+      const victim = folk.people.find((p) => p.alive);
+      const out = makeHit();
+      const from = new THREE.Vector3(victim.position.x + 12, victim.position.y + TOWNSFOLK.chestHeight, victim.position.z);
+      const dir = new THREE.Vector3(-1, 0, 0);
+      resetHit(out);
+      folk.raycast(from, dir, 40, out);
+      const chest = { hit: out.hit, kind: out.kind };
+
+      const over = new THREE.Vector3(victim.position.x + 12, victim.position.y + TOWNSFOLK.modelHeight + 2, victim.position.z);
+      resetHit(out);
+      folk.raycast(over, dir, 40, out);
+      const overhead = out.hit;
+
+      // ...and combat's ignore set must hold their movement collider, or the
+      // collider list would answer first with an infinitely tall cylinder.
+      const ignored = victim.collider ? window.__debug.combat._ignore.has(victim.collider) : false;
+
+      const first = folk.hit(victim, from.x, from.z);
+      const healthAfterOne = victim.health.current;
+      const second = folk.hit(victim, from.x, from.z);
+      return {
+        chest, overhead, ignored, first, second, healthAfterOne,
+        colliderGone: victim.collider === null,
+        max: TOWNSFOLK.maxHealth, alive: victim.alive,
+        aliveCount: folk.aliveCount, total: folk.count,
+      };
+    });
+    if (!info.chest.hit || info.chest.kind !== 'townsfolk') return `a shot at chest height reported ${JSON.stringify(info.chest)}`;
+    if (info.overhead) return 'a shot two metres over their head still hit them';
+    if (!info.ignored) return "combat.js is not ignoring a townsperson's movement collider — shots would hit the cylinder, not the body";
+    if (info.first !== 'hit') return `the first round returned ${JSON.stringify(info.first)}`;
+    if (info.healthAfterOne !== info.max - 1) return `health went ${info.max} -> ${info.healthAfterOne} on one hit`;
+    if (info.second !== 'dead') return `the second round returned ${JSON.stringify(info.second)}`;
+    if (info.alive) return 'a townsperson survived their whole health bar';
+    if (!info.colliderGone) return 'a dead townsperson still blocks the street';
+    if (info.aliveCount !== info.total - 1) return `aliveCount is ${info.aliveCount} of ${info.total} after one death`;
+    return null;
+  }],
+
+  ['the horse takes itself to the hitching rail', async () => {
+    const info = await page.evaluate(async () => {
+      const { HORSE } = await import('/src/config-horse.js');
+      const d = window.__debug;
+      const h = d.horse;
+      const p = d.player;
+      const t = d.town;
+      const saved = { x: p.position.x, y: p.position.y, z: p.position.z, hx: h.position.x, hz: h.position.z };
+      if (p.mounted) h.handleMountToggle(p);
+
+      // Player on the saloon's boardwalk, horse loose 28m up the street — which
+      // is well past followSettleDistance, so the "you walked off and left it"
+      // clause is the one that has to fire.
+      p.position.set(-8.6, 0, 16);
+      p.position.y = h.world.groundHeightAt(p.position.x, p.position.z);
+      h.position.set(0, h.world.groundHeightAt(0, 44), 44);
+      h.velocityXZ.set(0, 0, 0);
+      for (let i = 0; i < 2400; i++) h.update(1 / 60, d.tpCamera, p, false);
+      const parked = {
+        mode: h.ai.mode,
+        distance: Math.hypot(h.position.x - t.hitch.x, h.position.z - t.hitch.z),
+        speed: h.speed,
+        yawError: Math.abs(((h.yaw - t.hitch.yaw + Math.PI) % (Math.PI * 2)) - Math.PI),
+      };
+
+      // ...and a whistle keeps it with you instead of sending it straight back.
+      h.ai.whistle();
+      for (let i = 0; i < 60; i++) h.update(1 / 60, d.tpCamera, p, false);
+      const whistled = h.ai.mode;
+
+      h.ai.whistled = false;
+      p.position.set(saved.x, saved.y, saved.z);
+      h.position.set(saved.hx, h.world.groundHeightAt(saved.hx, saved.hz), saved.hz);
+      return { parked, whistled, arrive: t.hitch.arriveDistance, settle: HORSE.followSettleDistance };
+    });
+    if (info.parked.mode !== 'hitched') return `the horse ended in mode "${info.parked.mode}" instead of hitched`;
+    if (!(info.parked.distance <= info.arrive + 0.6)) {
+      return `the horse stopped ${info.parked.distance.toFixed(2)}m from the rail (arriveDistance ${info.arrive})`;
+    }
+    if (info.parked.speed > 0.4) return `the horse never settled: still doing ${info.parked.speed.toFixed(2)} m/s at the rail`;
+    if (info.parked.yawError > 0.5) return `it parked facing ${info.parked.yawError.toFixed(2)}rad off the rail`;
+    if (info.whistled === 'hitched') return 'a whistle in town was overridden by the hitching post';
+    return null;
+  }],
+
+  ['the camera does not walk through a saloon wall', async () => {
+    // Boxes were skipped by the camera's occlusion sweep too, and it matters
+    // most exactly where the interior is: the pivot inside the room and the
+    // camera outside it, framing the back of a wall. `snap()` recomputes
+    // currentDistance through the sweep itself, so this needs no frames — and
+    // it takes a CONTROL reading in the open street, per docs/TESTING.md's
+    // "assert you measured something".
+    const info = await page.evaluate(async () => {
+      const { CAMERA } = await import('/src/config.js');
+      const d = window.__debug;
+      const t = d.town;
+      const s = t.saloon;
+      const p = d.player;
+      const cam = d.tpCamera;
+      const saved = { x: p.position.x, y: p.position.y, z: p.position.z, hx: d.horse.position.x, hz: d.horse.position.z };
+      const savedYaw = cam.yaw;
+      const savedPitch = cam.pitch;
+      // The horse's own collider clamps an on-foot camera, and it wanders — the
+      // exact way round 3's aim-camera check started lying. Push it away first.
+      d.horse.position.set(saved.hx + 250, d.horse.position.y, saved.hz + 250);
+      cam.setMounted(false);
+      cam.setAiming(0);
+      cam.pitch = 0;
+
+      // Standing 1.2m off the saloon's back wall, camera looking so that it
+      // wants to sit 5.2m the other side of it.
+      const sin = Math.sin(s.yaw);
+      const cos = Math.cos(s.yaw);
+      const hd = s.interiorBox.hd;
+      const inX = s.cx + (hd - 1.2) * sin;
+      const inZ = s.cz + (hd - 1.2) * cos;
+      // Camera offset direction is (sin(yaw), .., cos(yaw)); pick the yaw that
+      // pushes it along the saloon's own +local-Z, i.e. straight at that wall.
+      cam.yaw = Math.atan2(sin, cos);
+      p.position.set(inX, t.saloonFloorY, inZ);
+      cam.snap(p.position);
+      const inside = cam.currentDistance;
+
+      // Control: the middle of the street, where nothing is within 5m.
+      p.position.set(2, p.world.groundHeightAt(2, 30), 30);
+      cam.snap(p.position);
+      const open = cam.currentDistance;
+
+      p.position.set(saved.x, saved.y, saved.z);
+      d.horse.position.set(saved.hx, d.horse.position.y, saved.hz);
+      cam.yaw = savedYaw;
+      cam.pitch = savedPitch;
+      cam.snap(p.position);
+      return { inside, open, base: CAMERA.distance, min: CAMERA.minDistance };
+    });
+    if (!(info.open > info.base - 0.6)) {
+      return `the control reading in the open street was already clamped to ${info.open.toFixed(2)} of ${info.base} — nothing was measured`;
+    }
+    if (!(info.inside < 2.2)) {
+      return `the camera sat ${info.inside.toFixed(2)}m back with a wall 1.2m behind it — it went through the wall`;
+    }
+    return null;
+  }],
+
+  ['street lamps are lit, and can be turned off for round 7', async () => {
+    const info = await page.evaluate(async () => {
+      const { LAMPS } = await import('/src/config-town.js');
+      const { colliders } = await import('/src/collision.js');
+      const lamps = window.__debug.town.lamps;
+      const before = lamps.lights.map((l) => l.intensity);
+      lamps.setLit(false);
+      const off = { intensity: lamps.lights.map((l) => l.intensity), glows: lamps.glows.visible };
+      lamps.setLit(true);
+      const on = lamps.lights.map((l) => l.intensity);
+      const lampCols = colliders.filter((c) => c.meta?.kind === 'lamp');
+      return {
+        glowCount: lamps.glows.count,
+        posts: LAMPS.posts.length,
+        lights: lamps.lights.length,
+        points: LAMPS.points.length,
+        before, off, on,
+        lampCols: lampCols.length,
+        finiteTops: lampCols.every((c) => Number.isFinite(c.top)),
+      };
+    });
+    if (info.glowCount !== info.posts) return `${info.glowCount} glow instances for ${info.posts} lamp posts`;
+    if (info.lights !== info.points) return `${info.lights} point lights for ${info.points} configured`;
+    if (!info.before.every((v) => v > 0)) return 'the interior/porch lights are dark at boot';
+    if (!info.off.intensity.every((v) => v === 0)) return `setLit(false) left ${JSON.stringify(info.off.intensity)}`;
+    if (info.off.glows) return 'setLit(false) left the glow geometry visible';
+    if (!info.on.every((v) => v > 0)) return 'setLit(true) did not bring the lights back';
+    if (info.lampCols !== info.posts) return `${info.lampCols} lamp colliders for ${info.posts} posts`;
+    if (!info.finiteTops) return 'a lamp post is an infinitely tall obstacle — a shot cannot pass over it';
+    return null;
+  }],
+
+  ['draw calls stay inside budget standing in the town', async () => {
+    // The third sample docs/ROADMAP.md asked for: the existing budget checks
+    // read at spawn and at a camp, and the town is what round 5 added.
+    const before = await page.evaluate(() => {
+      const d = window.__debug;
+      d.player.position.set(2, 0, 30);
+      d.player.position.y = d.player.world.groundHeightAt(2, 30);
+      d.horse.position.set(-5, d.horse.world.groundHeightAt(-5, 24), 24);
+      d.tpCamera.yaw = 0; // looking up the street at the church
+      d.tpCamera.pitch = 0.08;
+      return d.drawCalls;
+    });
+    await page.waitForFunction((n) => window.__frames > n, await page.evaluate(() => window.__frames + 6), { timeout: 40000 });
+    const info = await page.evaluate(() => ({ calls: window.__debug.drawCalls }));
+    if (before === undefined) return 'no draw-call reading available';
+    if (!(info.calls > 0)) return 'draw calls read zero — nothing was rendered';
+    if (info.calls > 120) return `${info.calls} draw calls looking down the main street, over BUILD-PLAN.md's ~120 budget`;
+    console.log(`  (info) ${info.calls} draw calls looking down the main street`);
     return null;
   }],
 ];

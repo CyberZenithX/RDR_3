@@ -60,7 +60,11 @@ sRGB output, `PCFSoftShadowMap`), the async load sequence, and owns the
    resolves before the return fire. Each bandit thinks, moves, poses its own
    rig and then fires from its own muzzle, in that order: the same rule step 6
    obeys for the player, applied per bandit inside one loop.
-8. `tpCamera.setMounted(...)` / `setAiming(...)` / `ui.setMounted(...)` /
+8. `town.update(dt, player)` — after combat for the same reason step 7 is: a
+   round fired at a citizen resolves before that citizen decides to run. Also
+   ticks the street lamps and the saloon's door trigger, which reads the
+   player's **final** position for this frame.
+9. `tpCamera.setMounted(...)` / `setAiming(...)` / `ui.setMounted(...)` /
    `setAiming(...)` / `updateAmmo(...)` / `updateHealth(...)` /
    `updateDamageFlash(...)` / `setDead(...)` — called unconditionally every
    frame off live state; all idempotent, no edge detection.
@@ -121,10 +125,14 @@ in `src/`.
 domain warp + ridged noise + mesas + town plateau + boundary ridge, all
 smoothstep-blended). `normalAt(x,z)` via finite differences.
 `buildTerrain(scene)` builds the vertex-colored mesh. `groundHeightAt(x,z)`
-**just calls `heightAt` — it is not a raycast** (ADR-001). It stays a
-separately named function so a later round (town floors) can make it genuinely
-different without renaming every call site. The horse uses this exact function
-too, same as the player.
+**is not a raycast** (ADR-001) — and since round 5 it is no longer just
+`heightAt` either: it also honours the town's **floor plates**
+(`addFloorPlate`, `floorPlates`), the rotated rectangles the boardwalks and the
+saloon's floorboards register to stand 0.22m above the dirt (ADR-031). One AABB
+around the whole plate cluster rejects every caller who is not in town. A plate
+is a *surface*, never a collider. `heightAt` stays pure, so the terrain mesh,
+the prop scatter and the grass are untouched by the town's existence. The horse
+and the bandits use `groundHeightAt` too, same as the player.
 
 `src/sky.js` — gradient sky dome (custom `ShaderMaterial`, zenith/horizon/
 sun-disc), sun `DirectionalLight` + `HemisphereLight`, `FogExp2`.
@@ -142,7 +150,9 @@ local y=0) and a `meta.kind` of `'rock'` / `'cactus'` / `'tree'`.
 Measured populations: rock tops 0.6–3.6m (median **2.50**), cacti median
 **3.10**, trees median **5.20**.
 
-`src/grass.js` — grass tufts (crossed triangle blades, vertex-colored
+`src/grass.js` — (also honours `STREET.grassKeepOut`: nothing grows on a
+packed dirt street or under a boardwalk, tested as one rectangle rather than
+per building footprint) grass tufts (crossed triangle blades, vertex-colored
 root→tip) as one fixed-size `InstancedMesh` pool that **follows the player**,
 re-bucketed onto a world-space jittered grid (deterministic per cell via
 hashing, so it doesn't visibly reshuffle) whenever the player moves
@@ -156,6 +166,51 @@ builders, wires `update(playerPos)` (shadow follow + grass recenter), exposes
 `src/collision.js` — the one collider array (`colliders`),
 `addCircleCollider` / `addBoxCollider` / `removeCollider`, and
 `resolveCollisions(pos, radius, ignore, clearY)`. See the contract below.
+
+### Town
+
+`src/town.js` — the orchestrator, world.js's role for round 5. Owns no geometry:
+it runs `buildings.js`, `town-props.js` and `townsfolk.js` into two shared part
+builders, `finish()`es them, and owns the two things that belong to the town as
+a whole — the saloon's **door trigger** (`inside`, `placeName`, `fade`, a metered
+black-out with a dead band and a cooldown; `DOOR.enabled = false` switches it
+off without touching the doorway) and the **hitching post** the horse waits at
+(`town.hitch`, handed to `horse.setHitchPost()` by main.js). `buildTown()` never
+rejects.
+
+`src/town-geo.js` — `PartBuilder`: the vertex-coloured box/cylinder/cone/prism/
+pyramid pushers, a local **frame** (`setFrame(x, y, z, yaw)`, so a building is
+authored in its own space with its front at local -Z), and `finish()`, which
+merges everything pushed into one mesh. This is why the whole town is **two draw
+calls** — ADR-033. Reusable: round 6's bounty board and round 7's props should go
+through it rather than adding meshes.
+
+`src/buildings.js` — one building from a `BUILDINGS` spec: `resolvePlacement`
+(a `side` of `'west'`/`'east'`/`'north'` becomes a centre and a facing, which is
+what makes the frontages line up), the shell, roof, false front, porch, windows,
+sign, steeple and boardwalk — plus the three things that make a building more
+than scenery: **box colliders** (round 5 is `resolveBox`'s first caller; the
+saloon is five walls because a front wall with a doorway in it is two walls),
+**floor plates**, and `buildSaloonInterior`.
+
+`src/town-props.js` — the hitching rail, its trough, the boardwalk crates, and
+`StreetLamps`. A lamp's post is static and merges with everything else; its glow
+is `campfire.js`'s flame tier — one `InstancedMesh`, unlit, `fog: false`,
+flickering off a shared clock. `setLit(bool)` is round 7's switch. The three real
+`PointLight`s are kept to three deliberately: every one is compiled into every
+standard material's shader in the scene.
+
+`src/townsfolk.js` — the citizens as a group, built to bandits.js's shape (one
+GLB load, a `rig-clone.js` copy per body over shared geometry, a merged rig, an
+`activeRadius` freeze, a shared `rayIgnore`, `hearShot`, an explicit
+foot-to-head cylinder for shots). Three deliberate differences, all in ADR-034:
+they are `player.glb` rather than `bandit.glb`, they clone their own
+**materials** and tint them, and they are unarmed but shootable.
+
+`src/townsperson.js` — one citizen's body and brain, split out under the
+400-line cap on bandit.js/bandits.js's seam. `idle → stroll → watch → flee →
+dead`, with no cover search, no shooting and no navmesh — which is why the
+brain sits in the same file rather than in a third one.
 
 ### Characters
 
@@ -407,6 +462,12 @@ markup lives in `index.html` — the one exception is the ammo pips, built from
 `CLIP_CANDIDATES`, `JUMP`, `PLACEHOLDER`, `CAMERA`, `INPUT`, `PROPS`, `GRASS`,
 `UI`. `JUMP` is placeholder-only fallback pose constants.
 
+`src/config-town.js` — every round-5 tunable: `STREET`, `TOWN_BUILD`,
+`TOWN_COLORS`, `BUILDINGS` (the hand-placed coordinate list), `SALOON`,
+`HITCH`, `LAMPS`, `TOWNSFOLK`, `DOOR`. The fifth config file. `TOWN` — the
+plateau the town stands on — stays in `config.js`, because the plateau is a
+property of the terrain.
+
 `src/config-horse.js` — every horse tunable: `HORSE`, `HORSE_ANIM`,
 `HORSE_CLIP_CANDIDATES`, `HORSE_CLIP_REFERENCE_SPEED`, `RIDING_POSE`, `TACK`,
 `PLACEHOLDER_HORSE`. Split out purely to keep `config.js` under the 400-line
@@ -466,7 +527,25 @@ resolveCollisions(pos, radius, ignore, clearY)
   `removeCollider` when something is destroyed. Anything holding a collider
   reference across frames must tolerate it disappearing — `combat.js` keeps the
   horse's in an ignore Set, which is safe because the horse is never destroyed.
-- Buildings (round 5) will be the first real users of `resolveBox`.
+- **`rot` is the box's own rotation about +Y, read the way
+  `Object3D.rotation.y` is.** Round 5 flipped `resolveBox`'s sign to make that
+  true (it had no caller, and the cardinal yaws a town is built on cannot tell
+  the two conventions apart — ADR-032). `raycastBox` and `terrain.js`'s floor
+  plates share the convention, and the smoke check that guards it uses a
+  deliberately **non-cardinal** box, because nothing else can see the
+  difference.
+- **Boxes are now first-class everywhere a circle was**: `resolveCollisions`
+  (round 5's buildings, `resolveBox`'s first real caller),
+  `raycastColliders` → `raycastBox` (ADR-032, so a shot stops at a wall), and
+  `camera.js`'s occlusion sweep → `segmentBoxHit` (so the camera does not frame
+  the back of a wall from inside the saloon). Anything else that walks the
+  collider list and branches on `type === 'circle'` is now a gap, not a
+  simplification — `bandit-ai.js`'s cover search still does, on purpose (a
+  building is not a rock to peek round).
+- `meta.kind` gained round 5's `'building'` (with `meta.name`, and `meta.part`
+  on the saloon's five walls), `'hitch'`, `'trough'`, `'crate'`, `'lamp'` and
+  `'townsfolk'` (carrying `meta.person`). Lamps, crates, the rail and the trough
+  all carry a real finite `top`; buildings and townsfolk keep `Infinity`.
 
 ---
 
@@ -481,6 +560,15 @@ resolveCollisions(pos, radius, ignore, clearY)
 - `BOUNDARY.playerLimit` — the hard clamp radius. The horse is clamped to the
   same radius by the same formula. No placed content (bandit camps, town) may
   end up outside it.
+- `STREET` — `halfWidth` / `frontOffset` / `boardwalkDepth` / `southEnd` /
+  `northEnd`, plus `grassKeepOut`. The main street runs along **Z** because
+  `SPAWN` faces -Z: the town is in front of the player on frame one, with the
+  church closing the far end and `MESAS[0]` standing behind it.
+- `BUILDINGS` — the hand-placed coordinate list BUILD-PLAN.md requires. A
+  `side` (`'west'` / `'east'` / `'north'`) resolves to a centre and a facing in
+  `buildings.js`; writing the side rather than the centre is what guarantees the
+  frontages line up. Round 6's bounty board can read `name` off it, exactly as
+  it reads `CAMPS`.
 - `MESAS` — `{x, z, radius, top, flat}[]`. Landmarks other systems can
   reference. If you move one or push the boundary inward, re-check
   `mesa.x/z ± mesa.radius` stays inside `BOUNDARY.ridgeStart` with margin —
@@ -525,6 +613,23 @@ resolveCollisions(pos, radius, ignore, clearY)
 - `Bandits.raycast(origin, dir, maxDist, out)` / `hit(bandit, fromX, fromZ)` /
   `hearShot(x, z)` / `aliveCount` / `states` / `rayIgnore` / `camps`. Same
   contract as `Targets`, so `combat.js` tests both against one hit record.
+- `Town.hitch` (`{x, z, yaw, callRadius, arriveDistance, railX, railZ}`) /
+  `isInsideSaloon(x, z, margin)` / `saloonFloorY` / `inside` / `placeName` /
+  `fade` / `buildings` / `saloon` / `lamps` / `townsfolk` / `counts`.
+  `town.update(dt, player)` is the whole per-frame surface.
+- `Horse.setHitchPost(point)` — the sanctioned public entry point (ADR-011);
+  `horse.ai.mode` gains `'hitched'` and `horse.ai.holdYaw` is the yaw a
+  standing horse settles onto. Pass null to un-hitch the world.
+- `Townsfolk.raycast(origin, dir, maxDist, out)` / `hit(person, fromX, fromZ)` /
+  `hearShot(x, z)` / `aliveCount` / `count` / `states` / `rayIgnore` / `people`.
+  Deliberately the same contract `Targets` and `Bandits` have, so `combat.js`
+  tests all three against one hit record. Round 6's wanted level hangs off
+  `hit()` returning `'hit' | 'dead'`.
+- `StreetLamps.setLit(bool)` — round 7's day/night switch, already wired.
+- `raycastBox` / `segmentBoxHit` — the box halves of the geometry query and the
+  camera sweep (ADR-032).
+- `addFloorPlate(x, z, w, d, rot, y)` / `floorPlates` — raised walkable
+  surfaces `groundHeightAt` honours (ADR-031).
 - `Bandit.damage(n, fromX, fromZ)` / `alive` / `hasLineOfSight(player)` /
   `ai.state`. `BanditAI.alert(x, z)` is the "something happened over there"
   entry point.
@@ -560,7 +665,9 @@ aiming  aimWeight  ammo  reloading  shotsFired
 targetCounts  targetsAlive  audioMissing
 playerHealth  playerDead
 banditCounts  banditsAlive  banditStates    drawCalls
-targets  combat  bandits  renderer          (live object references)
+townCounts   insideSaloon   screenFade
+townsfolkAlive   townsfolkStates   horseHitchMode
+targets  combat  bandits  town  renderer     (live object references)
 ```
 
 `renderer` is there so `renderer.info.render.calls` — BUILD-PLAN.md's ~120
@@ -588,15 +695,16 @@ existed only while there was a retargeted player jump clip.
 - **Camera `lookAt` is recomputed instantly from a damped position**, not
   itself damped — could look slightly swimmy for a frame or two right after a
   big obstruction-triggered zoom-in. Not visually confirmed; minor.
-- **`resolveBox` has no real caller yet** — written and unit-testable, first
-  used by round 5's buildings.
-- **The draw-call budget is tight.** 39–45 at spawn, **110** with one camp,
-  its fire, the horse and the player in frame, against BUILD-PLAN.md's ~120.
-  Round 4 found 126 and got it back by merging the revolver's seven
-  part-meshes into one per material (`weapons.js`); the signal fire then spent
-  four of what that recovered. A smoke check now samples at a camp as well as
-  at spawn. Round 5's buildings and round 7's performance pass share what is
-  left, and it is not much.
+- **The draw-call budget has real headroom again.** 58 at spawn, **55**
+  standing in the middle of the street, 63 with a whole camp on screen, against
+  BUILD-PLAN.md's ~120. `rig-merge.js` (round 4) and the town's single merged
+  mesh (ADR-033) are why; the town itself costs about four calls. Three smoke
+  checks sample it — at spawn, at a camp, and down the main street.
+- **Three `PointLight`s exist now** (two in the saloon, one over its porch).
+  Every one is compiled into every standard material's shader in the scene, so
+  that number is a budget in its own right — it cost about 10% of frame rate in
+  the headless rasteriser. They cast no shadow, so their `distance` cutoff is
+  the only thing stopping them lighting the street through the saloon's walls.
 - **Dead bandits are never cleaned up.** The body stays, and its clamped Death
   clip is still mixer-updated whenever the player is inside
   `BANDIT.activeRadius`.

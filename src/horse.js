@@ -12,18 +12,13 @@
  *  - mounted and aiming: A/D become a direct yaw rate and W/S drop out
  *    entirely — see `_updateMountedAiming`, and BUILD-PLAN.md's round 3.
  *
- * Mount/dismount has no animation clip (per BUILD-PLAN.md's fake table) —
- * mounting eases the player's rendered position onto the saddle point over
- * HORSE.mountLerpTime; dismounting is instant. main.js reads
- * `getSaddleTransform()` every frame the player is mounted and copies it
- * onto the Player instance; player.js's own on-foot physics do not run
- * while `player.mounted` is true (see its update()).
- *
- * Three neighbours own the rest of the animal, all split out under
- * BUILD-PLAN.md's 400-line cap: horse-jump.js owns the vertical axis (gravity,
- * the arc, what an obstacle has to be under to pass beneath), horse-seat.js
- * owns where the rider sits and how the body under them moves, and
- * horse-ai.js owns what the animal does when nobody is on it.
+ * Mount/dismount has no animation clip (per BUILD-PLAN.md's fake table): a
+ * mount eases onto the saddle over HORSE.mountLerpTime, a dismount is instant,
+ * and main.js copies `getSaddleTransform()` onto the Player every mounted
+ * frame. Three neighbours own the rest of the animal, all split out under the
+ * 400-line cap — horse-jump.js the vertical axis, horse-seat.js where the rider
+ * sits, horse-ai.js what it does when nobody is on it. Semantics and the
+ * measured invariants: docs/HORSE.md.
  *
  * No vectors are allocated inside update() — everything reusable is an
  * instance scratch object, per the performance budget rule.
@@ -102,20 +97,18 @@ export class Horse {
 
     character.root.position.copy(this.position);
     character.root.rotation.y = this.yaw + HORSE.meshYawOffset;
-    // 'YXZ' so the bank is taken about the horse's own longitudinal axis and
-    // the jump pitch about its own lateral one, whichever way it is facing.
-    // Under the default 'XYZ' the pitch would be a world-X rotation, which
-    // tips a horse travelling east sideways instead of nose-up.
+    // 'YXZ' so the bank is about the horse's own longitudinal axis and the jump
+    // pitch about its own lateral one, whichever way it faces. Under the default
+    // 'XYZ' the pitch is a world-X rotation, which tips an eastbound horse over.
     character.root.rotation.order = 'YXZ';
     this.seat.captureRest();
   }
 
   /**
    * Stamina as a 0..1 fraction of the tank, which is what the UI bar wants.
-   * `ui.js` is deliberately generic and knows nothing about horses, so the
-   * normalisation belongs here with the number it normalises against rather
-   * than as a hardcoded assumption that `HORSE.staminaMax` is 1 — which it is
-   * not, and which is exactly what broke when the tank was resized.
+   * `ui.js` is generic and knows nothing about horses, so the normalisation
+   * lives here with the number it normalises against rather than as a hardcoded
+   * assumption that `HORSE.staminaMax` is 1 — which is what broke when it wasn't.
    */
   get staminaFraction() {
     return HORSE.staminaMax > 0 ? this.stamina / HORSE.staminaMax : 0;
@@ -300,6 +293,11 @@ export class Horse {
     this._turnToward(dt, targetSpeed > 0);
   }
 
+  /** Where the hitching rail is; the public entry point, per ADR-011. Null un-hitches. */
+  setHitchPost(point) {
+    this.ai.setHitchPost(point);
+  }
+
   /** Shared accel/decel integration + XZ position update for both movement modes. */
   _integrateMovement(dt, targetSpeed) {
     this._desiredVel.copy(this._moveDir).multiplyScalar(targetSpeed);
@@ -321,6 +319,11 @@ export class Horse {
     if (moving) {
       const targetYaw = Math.atan2(-this._moveDir.x, -this._moveDir.z);
       this.yaw = lerpAngle(this.yaw, targetYaw, Math.min(1, HORSE.turnRate * dt));
+    } else if (!this.mounted && this.ai.holdYaw !== null) {
+      // Standing at the hitching rail: settle onto the yaw a hitched horse stands
+      // at rather than whatever heading it arrived on. Guarded on `mounted` —
+      // horse-ai.js does not run with a rider up, so holdYaw would be stale.
+      this.yaw = lerpAngle(this.yaw, this.ai.holdYaw, Math.min(1, HORSE.turnRate * 0.4 * dt));
     }
     // Wrapped yaw delta this frame (turning through the +-PI seam should not
     // spike the lean), then a per-second rate.

@@ -147,11 +147,125 @@ export function raycastSphere(origin, dir, maxDist, cx, cy, cz, r, out) {
   return true;
 }
 
+/**
+ * Ray against an upright, Y-rotated box: `w` × `d` in plan, running from the
+ * ground up to `top`. Same "only if it beats what `out` holds" contract as
+ * `raycastCylinder`.
+ *
+ * ROUND 5'S WALLS. Until now `raycastColliders` skipped boxes outright, which
+ * was harmless while nothing in the world had an inside: a building's collider
+ * was the only box in the game and a shot at one was resolved by the terrain
+ * behind it. The saloon changed that — docs/ROADMAP.md flagged it before the
+ * round started: "A shot fired inside the saloon will go straight through the
+ * walls until that is written." This is that. ADR-032.
+ *
+ * A slab test rather than four quad tests: transform the ray into the box's own
+ * frame and intersect three pairs of parallel planes, keeping the latest entry
+ * and earliest exit. The Y slab runs from -Infinity to `top`, which is the same
+ * reading `raycastCylinder` gives a grounded collider — you cannot shoot under a
+ * wall, and `top: Infinity` (which every building keeps, per the collision
+ * contract) means you cannot shoot over one either.
+ *
+ * `rot` is the box's own rotation about +Y, the same sense `Object3D.rotation.y`
+ * and `collision.js`'s `resolveBox` use.
+ */
+export function raycastBox(origin, dir, maxDist, cx, cz, w, d, rot, top, out) {
+  const cos = Math.cos(rot);
+  const sin = Math.sin(rot);
+  const dx = origin.x - cx;
+  const dz = origin.z - cz;
+  // World → box space, for both the origin and the direction.
+  const ox = dx * cos - dz * sin;
+  const oz = dx * sin + dz * cos;
+  const rx = dir.x * cos - dir.z * sin;
+  const rz = dir.x * sin + dir.z * cos;
+
+  let tEnter = -Infinity;
+  let tExit = Infinity;
+  // 0 = box X face, 1 = box Z face, 2 = the top cap.
+  let enterAxis = 0, enterSign = 1, exitAxis = 0, exitSign = 1;
+
+  // The two horizontal slabs.
+  const slabs = [[ox, rx, w / 2, 0], [oz, rz, d / 2, 1]];
+  for (const [o, r, half, id] of slabs) {
+    if (Math.abs(r) < 1e-9) {
+      if (Math.abs(o) > half) return false; // parallel and outside
+      continue;
+    }
+    const inv = 1 / r;
+    let t0 = (-half - o) * inv;
+    let t1 = (half - o) * inv;
+    let s0 = -1; // which face of this slab t0 is on, in box space
+    if (t0 > t1) { const tmp = t0; t0 = t1; t1 = tmp; s0 = 1; }
+    if (t0 > tEnter) { tEnter = t0; enterAxis = id; enterSign = s0; }
+    if (t1 < tExit) { tExit = t1; exitAxis = id; exitSign = -s0; }
+    if (tEnter > tExit) return false;
+  }
+
+  // The top cap. There is no bottom: a grounded box extends down forever, which
+  // is the same reading raycastCylinder gives a collider with no explicit base.
+  if (Number.isFinite(top)) {
+    if (Math.abs(dir.y) < 1e-9) {
+      if (origin.y > top) return false;
+    } else {
+      const t = (top - origin.y) / dir.y;
+      if (dir.y < 0) {
+        // Coming down onto the cap: it is the entry plane.
+        if (t > tEnter) { tEnter = t; enterAxis = 2; enterSign = 1; }
+      } else if (t < tExit) {
+        // Climbing: the cap is where the ray leaves.
+        tExit = t; exitAxis = 2; exitSign = 1;
+      }
+      if (tEnter > tExit) return false;
+    }
+  }
+
+  if (tExit < 0) return false; // the whole box is behind the muzzle
+  // A muzzle already INSIDE the box (a shooter pressed against a wall with the
+  // barrel poking into it) has no entry face to strike, so the round punches out
+  // of the far one — at most a wall's thickness away. Reporting the entry at
+  // t=0 instead would put the spark and the decal inside the shooter's own hand,
+  // and returning nothing would be the wall not stopping the shot at all, which
+  // is the bug this function exists to fix.
+  const inside = tEnter < 0;
+  const t = inside ? tExit : tEnter;
+  const axis = inside ? exitAxis : enterAxis;
+  const sign = inside ? exitSign : enterSign;
+  if (t > maxDist || t >= out.distance) return false;
+
+  out.hit = true;
+  out.distance = t;
+  out.point.set(origin.x + dir.x * t, origin.y + dir.y * t, origin.z + dir.z * t);
+  if (axis === 2) {
+    out.normal.set(0, 1, 0);
+  } else {
+    // The face normal in box space, rotated back out to the world.
+    const nx = axis === 0 ? sign : 0;
+    const nz = axis === 1 ? sign : 0;
+    out.normal.set(nx * cos + nz * sin, 0, -nx * sin + nz * cos);
+  }
+  return true;
+}
+
 export function raycastColliders(origin, dir, maxDist, ignore, out) {
   let found = false;
   for (const col of colliders) {
     if (ignore && ignore.has(col)) continue;
-    if (col.type !== 'circle') continue; // boxes arrive with round 5's buildings
+    if (col.type === 'box') {
+      // Broad phase, as below: the box's own half-diagonal covers any rotation.
+      const bxx = col.x - origin.x;
+      const bzz = col.z - origin.z;
+      const boxReach = maxDist + Math.hypot(col.w, col.d) * 0.5;
+      if (bxx * bxx + bzz * bzz > boxReach * boxReach) continue;
+      if (raycastBox(origin, dir, maxDist, col.x, col.z, col.w, col.d, col.rot, col.top, out)) {
+        out.collider = col;
+        out.kind = col.meta?.kind ?? 'prop';
+        out.ref = col.meta?.target ?? null;
+        found = true;
+      }
+      continue;
+    }
+    if (col.type !== 'circle') continue;
     // Broad phase: nothing further away than the ray is long can be crossed by
     // it. Five flops, and it is what makes round 4's SHORT rays cheap — every
     // bandit casts three 3.4m avoidance rays and a line-of-sight ray every

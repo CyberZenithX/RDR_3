@@ -470,6 +470,107 @@ The spirit of the requirement — do not make a player ride 400m back to a fight
 — is kept intact. `player.respawn()` remains the single function round 7
 replaces.
 
+### ADR-031 — `groundHeightAt` finally differs from `heightAt`: floor plates — *Accepted*
+
+Round 1 split `groundHeightAt` out of `heightAt` as a named seam and noted "in
+case a later round needs it to differ, e.g. round 5 town interiors with a floor
+height". Round 5 is that round: the boardwalks and the saloon's floorboards
+stand `TOWN_BUILD.floorStep` (0.22m) above the dirt.
+
+The mechanism is a list of **floor plates** — rotated rectangles carrying a
+world Y — registered by `buildings.js` and honoured only by `groundHeightAt`.
+`heightAt` stays pure, so the terrain mesh, the prop scatter and the grass are
+untouched by the town's existence.
+
+Two things make this cheap enough to sit in a function the player, the horse and
+eleven bandits call every frame: one AABB around the whole plate cluster rejects
+every caller who is not in town in four comparisons, and there are eleven plates,
+not eleven hundred.
+
+**A plate is a surface, never a collider.** A 22cm step registered as an obstacle
+would be an invisible wall down the whole street frontage; as a plate, an agent
+walks up onto it with the ordinary `PLAYER.groundSnap` (0.35) and nothing else in
+the game has to know it happened.
+
+---
+
+### ADR-032 — A bullet stops at a wall: `raycastBox` — *Accepted*
+
+`raycastColliders` skipped boxes outright (`col.type !== 'circle'`). That was
+harmless for four rounds because a building's collider was the only box in the
+game and a shot at one was resolved by the terrain behind it. The saloon's
+interior ends that: docs/ROADMAP.md flagged it before the round started — "a
+shot fired inside the saloon will go straight through the walls until that is
+written."
+
+`raycastBox` is a slab test in the box's own frame, with the Y slab running from
+`-Infinity` to the collider's `top` — the same reading `raycastCylinder` gives a
+grounded collider. You cannot shoot under a wall, and `top: Infinity` (which
+every building keeps, per the collision contract) means you cannot shoot over one
+either. A ray whose origin is already *inside* a box reports the exit face rather
+than a hit at zero distance: a shooter pressed against a wall with the barrel
+poking into it should spark on the far side, not inside their own hand.
+
+The same gap existed in **`camera.js`'s occlusion sweep**, and mattered more
+there: with the pivot inside the saloon and the camera outside it, the shot is
+framed on the back of a wall. `segmentBoxHit` closes it.
+
+While fixing this, `collision.js`'s `resolveBox` had its rotation convention
+**flipped** to match: `rot` now means what `Object3D.rotation.y` means. It had no
+caller, and every building in town sits at 0, ±π/2 or π where a box is symmetric
+enough that the two conventions are indistinguishable — so it was corrected
+rather than documented as a trap. The smoke check that guards it uses a
+deliberately non-cardinal box for exactly that reason.
+
+---
+
+### ADR-033 — The town is one merged, vertex-coloured mesh — *Accepted*
+
+Round 4 left the draw-call budget as the binding constraint and docs/ROADMAP.md
+was explicit: "instance or merge by material from the start rather than as a
+rescue." Ten buildings, eight lamps, the boardwalks, a hitching rail and a
+saloon's furniture, split by material (planks, roof, trim, stone, paint), is five
+or six meshes — doubled again by the shadow pass.
+
+So the town does what `rig-merge.js` does to a character: every part's flat
+colour is baked into a `color` attribute and the whole lot is merged into **one**
+geometry drawn with one white `vertexColors` material, plus one more for the
+glass (which needs transparency and therefore its own material). Measured: **55
+draw calls standing in the middle of the street**, 58 at spawn, against
+BUILD-PLAN.md's ~120 — the town itself costs about four.
+
+The cost is that the town is one object with one bounding box, so frustum culling
+can never skip part of it. That is the right trade at this scale: it is a few
+thousand triangles either way, and a triangle drawn needlessly is far cheaper
+than a draw call issued needlessly. `town-geo.js`'s `PartBuilder` is the tool,
+and it is reusable — round 6's bounty board and round 7's props should go through
+it rather than adding meshes.
+
+---
+
+### ADR-034 — Townsfolk are `player.glb` with cloned materials — *Accepted*
+
+There is no third humanoid GLB and none can be fetched (docs/ASSETS.md), so the
+townsfolk had to be the player's model or the bandit's. Dressing them in the
+**enemy** silhouette would put five men who read as bandits in the middle of
+town, in a round whose whole job is making the town read as a place — so they are
+`player.glb`.
+
+That leaves five identical twins, which is why each body clones its own
+**materials** (not its geometry) and multiplies a per-person tint through them.
+This is safe here and forbidden on a bandit for one reason: `cloneRig` shares
+materials by reference, so recolouring in place would change every body at once —
+that is why a bandit's hit reaction is a clip rather than a colour flash
+(ADR-029). Cloning first is what makes it per-person; geometry stays shared,
+which is where the memory actually is.
+
+They are unarmed via `weapon.setVisible(false)` — the first caller of a switch
+`weapons.js` has carried unused since round 3 — and they carry `Health` and are
+shootable, because round 6's wanted level is built on shooting innocents and an
+invulnerable prop is a worse foundation than a man who bleeds.
+
+---
+
 ---
 
 ## Superseded decisions

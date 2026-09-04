@@ -22,6 +22,7 @@ open a file, and points at `docs/` for everything else.
 | why something odd-looking is the way it is | [`docs/DECISIONS.md`](docs/DECISIONS.md) |
 | guns, aiming, the shot, targets, effects, audio | [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-023..026, then [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)'s Combat section |
 | bandits, camps, health, dying, respawn | [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-027..030, then [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)'s Bandits section |
+| the town, buildings, the saloon, townsfolk, lamps | [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-031..034, then [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)'s Town section |
 | a bug that smells familiar | [`docs/DEVELOPMENT-NOTES.md`](docs/DEVELOPMENT-NOTES.md) |
 | models, licences, scaling, what can't be fetched | [`docs/ASSETS.md`](docs/ASSETS.md) |
 | what the round you're starting must watch out for | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
@@ -41,16 +42,18 @@ open a file, and points at `docs/` for everything else.
 | 2d — horse jump (Space, while mounted) | **done** | |
 | 3 — guns | **done** | `round-3` |
 | 4 — bandits | **done** | `round-4` |
-| 5 — town | not started | |
+| 5 — town | **done** | `round-5` |
 | 6 — bounties, duels, wanted | not started | |
 | 7 — polish | not started | |
 
-**Next round: 5 — town.** Read [`docs/ROADMAP.md`](docs/ROADMAP.md) before you
-start. `resolveBox` finally gets its first caller; the plateau has been
-reserved since round 1 and `TOWN.halfSize` is the limit. Two things round 4
-leaves for it: the draw-call budget is now **genuinely tight** (106 of ~120
-with one camp on screen), and `config.js` is at 389 of the 400-line cap, so
-town tunables want a `config-town.js` from the start.
+**Next round: 6 — bounties, duels, wanted.** Read
+[`docs/ROADMAP.md`](docs/ROADMAP.md) before you start. Almost nothing new has
+to be built — the round wires existing pieces into a loop, and round 5 built
+the place it happens in. Three things it leaves you: everything static in town
+is **one merged mesh** (add a *part* via `town-geo.js`, never a mesh),
+townsfolk already carry `Health` and can be shot (which is the whole wanted
+level), and **`combat.js` is at 366 and `horse.js` at exactly 400** of the
+400-line cap — neither has room for a feature without a split first.
 
 ---
 
@@ -67,13 +70,14 @@ One line per file. Long form in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `src/config-horse.js` | Every horse tunable: `HORSE`, `HORSE_ANIM`, `RIDING_POSE`, `TACK`, `PLACEHOLDER_HORSE`, clip candidates — **plus** the mounted/airborne accuracy penalties and the aiming steer rates. |
 | `src/config-combat.js` | Every gun tunable: `GUN`, `COMBAT`, `AIM_POSE`, `VFX`, `TARGETS`, `AUDIO`. |
 | `src/config-ai.js` | Every bandit tunable: `BANDIT`, `CAMPS`, `CAMP_PROPS` — **plus `HEALTH`**, the whole game's lethality model (ADR-027). |
+| `src/config-town.js` | **New.** Every round-5 tunable: `STREET`, `TOWN_BUILD`, `TOWN_COLORS`, `BUILDINGS` (the hand-placed coordinate list), `SALOON`, `HITCH`, `LAMPS`, `TOWNSFOLK`, `DOOR`. `TOWN` — the plateau — stays in `config.js`. |
 | `src/noise.js` | Seeded PRNG + simplex + fbm + smoothstep. No internal deps. |
-| `src/terrain.js` | `heightAt` / `normalAt` / `buildTerrain` / `groundHeightAt`. |
+| `src/terrain.js` | `heightAt` / `normalAt` / `buildTerrain` / `groundHeightAt` — plus **floor plates** (`addFloorPlate`), which is what finally makes `groundHeightAt` differ from `heightAt` (ADR-031). |
 | `src/sky.js` | Sky dome shader, sun + hemisphere light, fog, shadow follow. |
 | `src/props.js` | Rocks, cacti, dead trees as `InstancedMesh`; registers a collider (with `top` and `meta.kind`) per placement. |
 | `src/grass.js` | Player-following instanced grass pool. |
 | `src/world.js` | Orchestrator only, ~35 lines. |
-| `src/collision.js` | The one collider array + `resolveCollisions(pos, radius, ignore, clearY)`. |
+| `src/collision.js` | The one collider array + `resolveCollisions(pos, radius, ignore, clearY)`. Round 5 gave `resolveBox` its first caller **and flipped its rotation sign** so `rot` means what `Object3D.rotation.y` means. |
 | `src/assets.js` | `loadGLTF`, `findClip`, `measureHeight`, `enableShadows`. |
 | `src/rig-clone.js` | Skinned deep-copy. `Object3D.clone()` shares a `SkinnedMesh`'s skeleton; this rebinds it. Stands in for `SkeletonUtils`, which cannot be fetched (ADR-029). |
 | `src/health.js` | `Health` — max/current/`damage()`/`reset()`, and nothing else. Player, bandits, round 6's deputies. |
@@ -94,6 +98,12 @@ One line per file. Long form in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `src/strap.js` | **New.** The shared leather builder — square tubes written along an arbitrary curve into one buffer per frame. Extracted from reins.js; the pattern to copy for any strap that spans two skeletons. |
 | `src/ik.js` | **New.** `aimBoneAt` and `solveTwoBoneIK`. Aims bones by *direction* rather than by local angle, which is what makes it usable on this baked-IK skeleton at all. |
 | `src/bandit-gun.js` | **New.** One bandit's firing path, split out of bandit.js when the aim lead pushed it past the 400-line cap. Still deliberately not combat.js (ADR-028). |
+| `src/town.js` | **New.** The town orchestrator — owns no geometry, wires the builders together, and owns the saloon's door trigger (`inside`/`placeName`/`fade`) and the hitching post (`town.hitch`). |
+| `src/town-geo.js` | **New.** `PartBuilder`: vertex-coloured box/cylinder/prism/pyramid pushers, a per-building local frame, and one `finish()` that merges the whole town into **one mesh** (ADR-033). Add a *part*, never a mesh. |
+| `src/buildings.js` | **New.** One building from a `BUILDINGS` spec: shell, roof, false front, porch, windows, sign, steeple, boardwalk — plus its box colliders, its floor plates, and the saloon's interior. |
+| `src/town-props.js` | **New.** Hitching rail, trough, boardwalk crates, and `StreetLamps` (instanced glow + three `PointLight`s, `setLit()` for round 7). |
+| `src/townsfolk.js` | **New.** The citizens as a group: bandits.js's shape (one load, cloned rigs, `activeRadius`, foot-to-head ray cylinder, `hearShot`) with three deliberate differences — `player.glb`, per-body cloned+tinted materials, unarmed but shootable (ADR-034). |
+| `src/townsperson.js` | **New.** One citizen's body and brain (`idle → stroll → watch → flee → dead`), split from townsfolk.js on bandit.js/bandits.js's seam. |
 | `src/tuning.js` | **New, debug only.** Live slider panel over the feel constants (F2, or `?tune`), with a Copy button that emits only what changed. Builds no DOM until opened. |
 | `src/riding-pose.js` | The hand-authored seated pose, bone by bone. Also the finger-grip axes. |
 | `src/aim-pose.js` | The hand-authored **aiming** pose: right arm, `Chest`, `Head`, recoil, the reload dip. Runs after the riding pose and claims a disjoint bone set — that split *is* the mounted-shooting blend. |
@@ -220,6 +230,34 @@ Read [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-027 through ADR-030.
   smoke column is 85m and its top must stay DARK, because the top is the only
   part that clears a ridge.
 
+## Before modifying the town, the saloon or the townsfolk
+
+Read [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-031 through ADR-034.
+
+- **Everything static in town is ONE merged, vertex-coloured mesh** (plus one
+  for the glass). Add a **part** through `town-geo.js`'s `PartBuilder`, never a
+  new mesh — that single merge is why a whole street costs about four draw
+  calls, and three smoke checks watch the number.
+- **A building is authored in its own frame** — local X across the frontage,
+  local Z into the depth, front wall at local -Z, origin on the floor. `side`
+  in `BUILDINGS` resolves to a centre and a facing; that is what makes the
+  frontages line up.
+- **A floor plate is a surface, never a collider.** The boardwalks and the
+  saloon floor stand 0.22m proud of the dirt and `groundHeightAt` honours them;
+  registering that step as an obstacle would be an invisible wall down the whole
+  street.
+- **A door is a lane, not a point.** A street lamp and the hitching rail both
+  shipped on top of the saloon's doorway and made it impassable. Anything with
+  a collider placed on the street has to be checked against the approach — the
+  smoke check walks it.
+- **Townsfolk clone their own materials and tint them.** That is safe *only*
+  because each body owns its copies; a bandit shares one material across eleven
+  bodies and must never be recoloured in place (ADR-029).
+- The three `PointLight`s are a budget of their own: each is compiled into
+  every standard material's shader in the scene, and they cast no shadow, so
+  their `distance` cutoff is the only thing keeping saloon light out of the
+  street.
+
 ## Before modifying collision, or making something jumpable
 
 Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#collision-contract).
@@ -232,6 +270,12 @@ Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#collision-contract).
   `top` at registration; buildings and characters keep the default.
 - **Moving colliders**: `addCircleCollider` **once**, then mutate `.x`/`.z` in
   place every frame. Never re-add/remove.
+- **Boxes are first-class now.** A box's `rot` means what `Object3D.rotation.y`
+  means (round 5 flipped `resolveBox`'s sign to make that true), and boxes are
+  handled by `resolveCollisions`, `raycastColliders` (`raycastBox`, ADR-032 —
+  without it a shot goes straight through the saloon's walls) **and**
+  `camera.js`'s occlusion sweep. Anything else that walks the collider list and
+  branches on `type === 'circle'` is a gap, not a simplification.
 
 ## Before modifying `main.js`'s frame order
 
@@ -349,6 +393,24 @@ These are still open:
   (`raycastSphere`), while movement keeps the cylinder. Cacti, trees and
   buildings are genuinely pillar-shaped and still use the cylinder.
 
+- **Nobody has walked the town in real play.** Round 5's whole feel — whether
+  the door fade reads as a transition or an interruption, whether the saloon is
+  dim or actually dark, whether the townsfolk read as five people or five
+  copies of the player, whether the boardwalk step feels like a step — was set
+  from measurements and static screenshots. What *was* seen, in screenshots
+  since deleted: the street reads as a street with the church closing the far
+  end and the mesa behind it, the saloon's doorway glows from inside, the
+  interior's bar and tables are legible, and townsfolk stand on the boardwalks.
+  Levers are tabulated in `config-town.js`.
+- **The horse has no obstacle avoidance, and the town is the first place that
+  matters.** `horse-ai.js` steers straight at its target and lets
+  `resolveCollisions` sort it out; the hitching post mitigates it (the animal
+  parks rather than following you between buildings), but a horse asked to
+  follow you down an alley will grind along a wall. Bandits got three avoidance
+  rays for exactly this; the horse never has.
+- **A shot through a saloon window is a shot through the wall.** Windows are
+  glass geometry with no collider of their own, so the wall's box stops the
+  round wherever it crosses. Right for a wall, arbitrary for a pane.
 - **Nobody has fought a bandit in real play.** Round 4's whole feel — how fast
   a camp wakes, whether the cover shuffle reads as cover or as milling about,
   whether the flinch is visible, whether being killed in ~8 seconds standing
@@ -357,14 +419,12 @@ These are still open:
   `config-ai.js`. What *was* seen: bandits stand and animate rather than
   T-posing, the revolver is in each man's fist, the tracer and the HUD show,
   and the signal fire reads as a landmark from the spawn plateau 335m away.
-- **~~The draw-call budget is genuinely tight~~ Much easier now: 34 at spawn,
-  63 with a whole camp** (was 49 and 110), against BUILD-PLAN.md's ~120.
-  `rig-merge.js` did it — see its header. Round 5's town has real headroom;
-  round 7's performance pass still owns the rest.
-  Historical figures, for comparison: 39–45 at spawn, 110 with one camp.
-  Merging the revolver's seven parts into one mesh per material took 20 off
-  that. Round 5's buildings and round 7's performance pass both have to live
-  inside what is left; the camp figure is now a smoke check.
+- **The draw-call budget survived the town: 58 at spawn, 55 down the main
+  street, 63 with a whole camp**, against BUILD-PLAN.md's ~120. The town costs
+  about four calls because it is one merged, vertex-coloured mesh (ADR-033);
+  `rig-merge.js` paid for the bodies. Historical figures: 49 at spawn and 110
+  at a camp before round 4's merges. Three smoke checks sample it now.
+  Round 7's performance pass owns the rest.
 - **The bandit AI is deliberately dumb in tight spaces** — BUILD-PLAN.md says
   so in as many words. Three forward rays and a sidestep timer, no navmesh.
 - **~~A dead bandit's body stays forever~~ Fixed.** The mixer stops once the
@@ -427,7 +487,8 @@ These are still open:
 - **Grass colour and keep-out fixes have not been visually re-confirmed**
   since the character-scale fix — a correctly sized character standing in
   grass is a different scene than the screenshots that prompted them.
-- **`resolveBox` has no caller yet** (round 5's buildings will be the first).
+- **~~`resolveBox` has no caller yet~~ Fixed** — round 5's buildings are the
+  first, and the sign of its rotation convention was wrong the whole time.
 
 ---
 

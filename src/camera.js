@@ -18,6 +18,43 @@ import { heightAt } from './terrain.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
+/**
+ * Closest distance along a segment (px,pz)+(dx,dz)*[0,len] to a Y-rotated box,
+ * or Infinity if it misses. XZ only, like the circle test below: a building's
+ * collider is `top: Infinity` by the collision contract, so there is no over.
+ *
+ * Round 5's buildings are the first boxes in the collider array, and without
+ * this the camera walks straight through the saloon's wall — which matters most
+ * exactly where the interior is, since the pivot is then inside the room and the
+ * camera outside it, framing the back of a wall.
+ */
+function segmentBoxHit(px, pz, dx, dz, len, c) {
+  const cos = Math.cos(c.rot);
+  const sin = Math.sin(c.rot);
+  const ox = (px - c.x) * cos - (pz - c.z) * sin;
+  const oz = (px - c.x) * sin + (pz - c.z) * cos;
+  const rx = dx * cos - dz * sin;
+  const rz = dx * sin + dz * cos;
+  let tEnter = 0;
+  let tExit = len;
+  for (const [o, r, half] of [[ox, rx, c.w / 2], [oz, rz, c.d / 2]]) {
+    if (Math.abs(r) < 1e-9) {
+      if (Math.abs(o) > half) return Infinity;
+      continue;
+    }
+    const inv = 1 / r;
+    let t0 = (-half - o) * inv;
+    let t1 = (half - o) * inv;
+    if (t0 > t1) { const tmp = t0; t0 = t1; t1 = tmp; }
+    if (t0 > tEnter) tEnter = t0;
+    if (t1 < tExit) tExit = t1;
+    if (tEnter > tExit) return Infinity;
+  }
+  // The pivot already inside the box (standing in a doorway) — snap tight, the
+  // same answer segmentCircleHit gives for its own inside case.
+  return tEnter;
+}
+
 /** Closest distance along a segment (px,pz)+(dx,dz)*[0,len] to a circle, or Infinity if it misses. */
 function segmentCircleHit(px, pz, dx, dz, len, cx, cz, r) {
   const ox = px - cx, oz = pz - cz;
@@ -157,10 +194,17 @@ export class ThirdPersonCamera {
     }
 
     for (const c of colliders) {
-      if (c.type !== 'circle' || c === ignoreCollider) continue;
+      if (c === ignoreCollider) continue;
       const dx = c.x - pivot.x, dz = c.z - pivot.z;
-      if (dx * dx + dz * dz > (baseDistance + c.r) * (baseDistance + c.r)) continue;
-      const hitLen = segmentCircleHit(pivot.x, pivot.z, dirX, dirZ, baseDistance, c.x, c.z, c.r);
+      let hitLen = Infinity;
+      if (c.type === 'circle') {
+        if (dx * dx + dz * dz > (baseDistance + c.r) * (baseDistance + c.r)) continue;
+        hitLen = segmentCircleHit(pivot.x, pivot.z, dirX, dirZ, baseDistance, c.x, c.z, c.r);
+      } else {
+        const reach = baseDistance + Math.hypot(c.w, c.d) * 0.5;
+        if (dx * dx + dz * dz > reach * reach) continue;
+        hitLen = segmentBoxHit(pivot.x, pivot.z, dirX, dirZ, baseDistance, c);
+      }
       if (hitLen < maxDist) maxDist = hitLen;
     }
 
