@@ -117,6 +117,36 @@ export function raycastCylinder(origin, dir, maxDist, cx, cz, base, top, r, out)
  * Colliders with `top: Infinity` are unlimited-height by contract, which is
  * the right reading here too: you cannot shoot over a building.
  */
+/**
+ * Ray against a sphere, written into `out` only if it beats what `out` already
+ * holds — the same contract as `raycastCylinder`.
+ *
+ * This exists because a collider circle is not a silhouette. A rock's collider
+ * is an upright cylinder at its widest radius, which is right for walking into
+ * and wrong for shooting past: a round crossing that cylinder a metre above the
+ * rock's shoulder would "hit" it and spark in mid-air. A sphere is a far better
+ * fit for a lumpy ball, and costs the same quadratic.
+ */
+export function raycastSphere(origin, dir, maxDist, cx, cy, cz, r, out) {
+  const ox = origin.x - cx;
+  const oy = origin.y - cy;
+  const oz = origin.z - cz;
+  const b = ox * dir.x + oy * dir.y + oz * dir.z;
+  const c = ox * ox + oy * oy + oz * oz - r * r;
+  // Pointing away from a sphere it is already outside of.
+  if (c > 0 && b > 0) return false;
+  const disc = b * b - c;
+  if (disc < 0) return false;
+  const sq = Math.sqrt(disc);
+  let t = -b - sq;
+  if (t < 0) t = -b + sq; // origin inside the sphere
+  if (t < 0 || t > maxDist || t >= out.distance) return false;
+  out.distance = t;
+  out.point.set(origin.x + dir.x * t, origin.y + dir.y * t, origin.z + dir.z * t);
+  out.normal.set(out.point.x - cx, out.point.y - cy, out.point.z - cz).normalize();
+  return true;
+}
+
 export function raycastColliders(origin, dir, maxDist, ignore, out) {
   let found = false;
   for (const col of colliders) {
@@ -131,7 +161,13 @@ export function raycastColliders(origin, dir, maxDist, ignore, out) {
     const bz = col.z - origin.z;
     const reach = maxDist + col.r;
     if (bx * bx + bz * bz > reach * reach) continue;
-    if (raycastCylinder(origin, dir, maxDist, col.x, col.z, -Infinity, col.top, col.r, out)) {
+    // A rock carries a sphere that follows what you can actually see; a pillar
+    // (cactus, tree, building) is a cylinder all the way up. See props.js.
+    const sphere = col.meta?.hitSphere;
+    const hit = sphere
+      ? raycastSphere(origin, dir, maxDist, col.x, sphere.cy, col.z, sphere.r, out)
+      : raycastCylinder(origin, dir, maxDist, col.x, col.z, -Infinity, col.top, col.r, out);
+    if (hit) {
       out.collider = col;
       out.kind = col.meta?.kind ?? 'prop';
       out.ref = col.meta?.target ?? null;

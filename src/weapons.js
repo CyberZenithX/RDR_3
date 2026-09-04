@@ -125,6 +125,14 @@ export class Revolver {
     this.muzzle.position.set(GUN.muzzleOffset.x, GUN.muzzleOffset.y, GUN.muzzleOffset.z);
     this.group.add(this.muzzle);
 
+    // Where the support hand is solved onto — see ik.js and aim-pose.js. An
+    // empty for the same reason the muzzle is one: it rides the gun through the
+    // aim pose, the recoil and the horse's bank without any of those knowing
+    // about it.
+    this.support = new THREE.Object3D();
+    this.support.position.set(GUN.supportOffset.x, GUN.supportOffset.y, GUN.supportOffset.z);
+    this.group.add(this.support);
+
     this.handBone = null;
     for (const name of GUN.handBoneCandidates) {
       const bone = rig.getObjectByName(name);

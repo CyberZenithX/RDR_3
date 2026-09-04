@@ -18,12 +18,16 @@
 
 import * as THREE from 'three';
 import { loadGLTF, findClip, enableShadows } from './assets.js';
+import { mergeRigMeshes } from './rig-merge.js';
 import { PlaceholderHorse } from './placeholder-horse.js';
 import { HORSE, HORSE_ANIM, HORSE_CLIP_REFERENCE_SPEED, HORSE_CLIP_CANDIDATES } from './config-horse.js';
 
 class HorseCharacterRig {
   constructor(gltf) {
     this.root = gltf.scene;
+    // Eight meshes, one per colour, each its own draw call in both passes.
+    // See rig-merge.js.
+    this.meshMerge = mergeRigMeshes(this.root);
     this.root.scale.setScalar(HORSE.modelScale);
     enableShadows(this.root);
 

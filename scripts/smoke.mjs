@@ -1049,6 +1049,78 @@ const CHECKS = [
 
   // ============================================================ round 3 ===
 
+  ['character rigs are merged down from one mesh per colour', async () => {
+    // These GLBs model one mesh per colour — 16 on a bandit — and each is a
+    // draw call in both the colour and the shadow pass. Measured before the
+    // merge: 110 draw calls at a camp against a ~120 budget. See rig-merge.js.
+    const info = await page.evaluate(() => {
+      const d = window.__debug;
+      const count = (root) => { let n = 0; root.traverse((o) => { if (o.isMesh) n++; }); return n; };
+      return {
+        player: count(d.player.character.root),
+        bandit: d.bandits.bandits[0] ? count(d.bandits.bandits[0].character.root) : null,
+        horse: count(d.horse.character.root),
+        placeholder: d.player.character.isPlaceholder,
+      };
+    });
+    if (info.placeholder) return null; // capsules have nothing to merge
+    if (!(info.horse <= 2)) return `horse rig is ${info.horse} meshes — the merge did not run`;
+    if (info.bandit !== null && !(info.bandit <= 9)) return `bandit rig is ${info.bandit} meshes, expected well under 16`;
+    if (!(info.player <= 12)) return `player rig is ${info.player} meshes, expected it merged`;
+    return null;
+  }],
+  ['the support hand reaches the gun instead of hovering near it', async () => {
+    // It used to be posed by three fixed angles, which cannot track a target
+    // that moves with elevation — measured, the hand sat 0.134 from the grip
+    // while the arm is only 0.423 long against a 0.556 reach. See ik.js.
+    const info = await page.evaluate(() => {
+      const rig = window.__debug.player.character;
+      if (rig.isPlaceholder || !rig.weapon?.support) return null;
+      const V = window.__debug.player.position.constructor;
+      const gaps = [];
+      for (const elevation of [-0.4, 0, 0.5]) {
+        rig.setAimPose({ weight: 1, elevation, recoil: 0, reload: 0, support: 1, hold: 1 });
+        rig.update(0.016);
+        rig.root.updateMatrixWorld(true);
+        rig.weapon.syncWorld();
+        const hand = rig.root.getObjectByName('WristL').getWorldPosition(new V());
+        gaps.push(hand.distanceTo(rig.weapon.support.getWorldPosition(new V())));
+      }
+      rig.setAimPose({ weight: 0 });
+      return { worst: Math.max(...gaps) };
+    });
+    if (!info) return null; // placeholder rig, or an unarmed one
+    console.log(`  (info) support hand sits ${info.worst.toFixed(3)} from the gun's grip at worst`);
+    return info.worst < 0.08 ? null : `support hand is ${info.worst.toFixed(3)} from the gun — hovering, not holding`;
+  }],
+  ['a riderless horse can be shot, bolts, and is never killed', async () => {
+    const info = await page.evaluate(async () => {
+      const { HEALTH } = await import('/src/config-ai.js');
+      const d = window.__debug;
+      if (d.player.mounted) d.horse.handleMountToggle(d.player);
+      d.horse.health.reset();
+      d.horse.mounted = true;
+      const mountedRefusal = d.horse.damage(HEALTH.horseDamage, 0, 0);
+      d.horse.mounted = false;
+      const outcomes = [];
+      for (let i = 0; i < HEALTH.horseMax + 1; i++) {
+        outcomes.push(d.horse.damage(HEALTH.horseDamage, d.horse.position.x + 5, d.horse.position.z));
+      }
+      const result = { mountedRefusal, outcomes, spooked: d.horse.spooked, health: d.horse.health.current, max: HEALTH.horseMax };
+      // Put the animal back. A bolting horse refuses to be mounted for
+      // HORSE.spookTime, which is exactly long enough to break every later
+      // check that needs to get on it — this check must not leave that behind.
+      d.horse.ai.spookT = 0;
+      d.horse.ai.spookRecoverT = 0;
+      d.horse.health.reset();
+      return result;
+    });
+    if (info.mountedRefusal !== null) return `a mounted horse took damage (${info.mountedRefusal}) — shots at the rider must not be soaked by the animal`;
+    if (!info.outcomes.includes('spooked')) return `taking ${info.max + 1} rounds never made it bolt: ${JSON.stringify(info.outcomes)}`;
+    if (!info.spooked) return 'the horse is not bolting after being shot up';
+    if (!(info.health > 0)) return 'the horse was left on zero health — it should bolt, never die';
+    return null;
+  }],
   ['draw calls are inside BUILD-PLAN.md\'s ~120 budget', async () => {
     // Not a feel check and not round 7's real performance pass — just a floor
     // that catches a round quietly adding fifty draw calls. vfx.js's pools are
@@ -2288,6 +2360,83 @@ const CHECKS = [
     console.log(`  (info) at ${camp}: ${info.calls} draw calls, ${info.triangles.toLocaleString()} triangles, ${info.alive} bandits alive`);
     return info.calls <= 120 ? null : `${info.calls} draw calls with a camp on screen, budget is ~120`;
   }],
+
+  ['dead bandits stop being animated, then are taken away', async () => {
+    // Both halves of the leak this closes: a corpse went on being posed every
+    // frame forever (a whole skeleton's cost for a clip that had already
+    // clamped), and went on costing its draw calls. The timings are shortened
+    // here rather than faked — the same code path runs, just on a fast clock,
+    // because BANDIT.corpseLinger is 25s and headless renders at ~3fps.
+    const setup = await page.evaluate(async () => {
+      const { BANDIT } = await import('/src/config-ai.js');
+      const d = window.__debug;
+      const saved = { linger: BANDIT.corpseLinger, sink: BANDIT.corpseSinkTime, max: BANDIT.maxCorpses };
+      // Phase one: nothing is crowded out, so every body lingers and can be
+      // sampled. The cap is exercised in phase two below.
+      BANDIT.corpseLinger = 30;
+      BANDIT.corpseSinkTime = 0.2;
+      BANDIT.maxCorpses = 99;
+      window.__corpseSaved = saved;
+      // Kill a whole camp's worth, more than the cap, so the crowding path runs.
+      const victims = d.bandits.bandits.filter((b) => b.alive).slice(0, 5);
+      for (const b of victims) b.damage(999, b.position.x + 1, b.position.z);
+      return { killed: victims.length, cap: BANDIT.maxCorpses };
+    });
+    if (setup.killed < 3) return `expected live bandits to kill, found ${setup.killed}`;
+
+    // Let the death clips clamp, then sample a bone twice: past the clip the
+    // pose must not change again, which is the "stopped being animated" claim.
+    // Wait on the clip actually finishing, not on a frame count: headless runs
+    // at ~3fps and RENDER.maxDeltaTime caps how much sim time a slow frame
+    // contributes, so N frames is not N/60 seconds of game time.
+    await page.waitForFunction(
+      () => window.__debug.bandits.bandits.some((b) => !b.alive && b.corpseT > b.deathClipT),
+      null, { timeout: 60000 },
+    );
+    const poseA = await page.evaluate(() => {
+      const b = window.__debug.bandits.bandits.find((x) => !x.alive && !x.retired && x.corpseT > x.deathClipT);
+      const bone = b?.character.root.getObjectByName('Chest');
+      return bone ? { q: bone.quaternion.toArray(), t: b.corpseT, clip: b.deathClipT } : null;
+    });
+    if (!poseA) return 'no dead bandit found to sample';
+    if (!(poseA.t > poseA.clip)) return `death clip has not finished yet (t=${poseA.t?.toFixed(2)} of ${poseA.clip?.toFixed(2)})`;
+    await page.waitForFunction((n) => window.__frames > n, await page.evaluate(() => window.__frames + 6), { timeout: 30000 });
+    const poseB = await page.evaluate(() => {
+      const b = window.__debug.bandits.bandits.find((x) => !x.alive && x.corpseT > x.deathClipT);
+      const bone = b?.character.root.getObjectByName('Chest');
+      return bone ? bone.quaternion.toArray() : null;
+    });
+    if (poseB) {
+      const drift = Math.max(...poseA.q.map((v, i) => Math.abs(v - poseB[i])));
+      if (drift > 0.001) return `a finished corpse is still being posed (bone moved ${drift.toFixed(4)} after the clip clamped)`;
+    }
+
+    // Phase two: squeeze the cap and drop the linger, and the bodies go.
+    await page.evaluate(async () => {
+      const { BANDIT } = await import('/src/config-ai.js');
+      BANDIT.corpseLinger = 0.1;
+      BANDIT.maxCorpses = 2;
+    });
+    let visible = 99;
+    try {
+      await page.waitForFunction((cap) => {
+        const dead = window.__debug.bandits.bandits.filter((b) => !b.alive);
+        return dead.filter((b) => b.character.root.visible).length <= cap;
+      }, setup.cap, { timeout: 30000 });
+      visible = await page.evaluate(() => window.__debug.bandits.bandits.filter((b) => !b.alive && b.character.root.visible).length);
+    } catch {
+      visible = await page.evaluate(() => window.__debug.bandits.bandits.filter((b) => !b.alive && b.character.root.visible).length);
+      return `${visible} corpses still visible, cap is ${setup.cap} — bodies are piling up`;
+    }
+    const retired = await page.evaluate(() => window.__debug.bandits.bandits.filter((b) => b.retired).length);
+    await page.evaluate(async () => {
+      const { BANDIT } = await import('/src/config-ai.js');
+      const s = window.__corpseSaved;
+      BANDIT.corpseLinger = s.linger; BANDIT.corpseSinkTime = s.sink; BANDIT.maxCorpses = s.max;
+    });
+    return retired > 0 ? null : 'no corpse was ever retired';
+  }],
+
 
   ['shot spread is a real cone, and riding widens it', async () => {
     // The accuracy penalty BUILD-PLAN.md requires for mounted fire, read off

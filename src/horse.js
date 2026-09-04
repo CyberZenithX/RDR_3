@@ -32,6 +32,8 @@
 import * as THREE from 'three';
 import { TOWN, BOUNDARY, SPAWN } from './config.js';
 import { HORSE, HORSE_ANIM } from './config-horse.js';
+import { HEALTH } from './config-ai.js';
+import { Health } from './health.js';
 import { isKeyDown, isPointerLocked } from './input.js';
 import { addCircleCollider, resolveCollisions } from './collision.js';
 import { HorseJump } from './horse-jump.js';
@@ -76,6 +78,10 @@ export class Horse {
     this.stamina = HORSE.staminaMax;
     this.staminaExhausted = false;
 
+    // Riderless-only, and it never kills — see HEALTH.horseMax. The bolt it
+    // triggers is unmounted behaviour, so horse-ai.js owns it.
+    this.health = new Health(HEALTH.horseMax);
+
     // Mount transition.
     this._mountBlendT = HORSE.mountLerpTime; // start "arrived" (fully unmounted, nothing to blend)
     this._premountPos = new THREE.Vector3();
@@ -117,7 +123,27 @@ export class Horse {
 
   /** Called on an H-key press (edge-detected here, not by the caller). */
   _handleWhistle() {
-    if (!this.mounted) this.ai.whistle();
+    // A bolting horse does not come when called.
+    if (!this.mounted && !this.spooked) this.ai.whistle();
+  }
+
+  /** True while the horse is running from something and will not be caught. */
+  get spooked() {
+    return this.ai.spooked;
+  }
+
+  /**
+   * A round landing on a riderless horse. Returns 'spooked' | 'hit' | null,
+   * the same three-way shape Bandits.hit() uses. Refuses outright while
+   * mounted — see HEALTH.horseMax for why that matters.
+   */
+  damage(amount, fromX, fromZ) {
+    if (this.mounted || this.spooked) return null;
+    const outcome = this.health.damage(amount);
+    if (!this.health.dead) return outcome ? 'hit' : null;
+    this.health.reset();
+    this.ai.spook(fromX, fromZ);
+    return 'spooked';
   }
 
   /** Straight-line distance from the horse to a world XZ point. */
@@ -327,6 +353,8 @@ export class Horse {
       // ground the instant they let go. Ignore it; they land in a moment.
       if (this.jump.airborne) return;
       this._dismount(player);
+    } else if (HORSE.spookMountBlock && this.spooked) {
+      // Bolting. It will not stand to be mounted until it settles.
     } else if (this._distanceTo(player.position) <= HORSE.mountRange) {
       this._premountPos.copy(player.position);
       this._premountYaw = player.meshYaw;

@@ -90,6 +90,12 @@ One line per file. Long form in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `src/bandit-ai.js` | The brain: `patrol → alert → chase → takeCover → shoot → flee → dead`, three-ray avoidance, the stuck detector. Owns no position. |
 | `src/horse-jump.js` | Everything **vertical**: the arc, the pitch, `clearance()`. |
 | `src/horse-seat.js` | Where the rider sits: spine sampling (`bob`/`sway`/`drift`), the banked seat point. |
+| `src/rig-merge.js` | **New.** Collapses a character GLB's one-mesh-per-colour layout (16 on a bandit) into a few meshes grouped by shading, baking each flat material colour into a vertex-colour attribute. Took a camp from **110 draw calls to 63**, and spawn from 49 to 34. Declines to touch anything textured, transparent, double-sided or non-standard. |
+| `src/strap.js` | **New.** The shared leather builder — square tubes written along an arbitrary curve into one buffer per frame. Extracted from reins.js when the saddle needed it; the pattern to copy for any strap that spans two skeletons. |
+| `src/saddle.js` | **New.** Saddle, girth and stirrups. Rides the same seat point (bob and all) as the rider so the two cannot drift apart; the stirrup iron is placed at the rider's own foot bone while mounted. |
+| `src/ik.js` | **New.** `aimBoneAt` and `solveTwoBoneIK`. Aims bones by *direction* rather than by local angle, which is what makes it usable on this baked-IK skeleton at all. |
+| `src/bandit-gun.js` | **New.** One bandit's firing path, split out of bandit.js when the aim lead pushed it past the 400-line cap. Still deliberately not combat.js (ADR-028). |
+| `src/tuning.js` | **New, debug only.** Live slider panel over the feel constants (F2, or `?tune`), with a Copy button that emits only what changed. Builds no DOM until opened. |
 | `src/riding-pose.js` | The hand-authored seated pose, bone by bone. Also the finger-grip axes. |
 | `src/aim-pose.js` | The hand-authored **aiming** pose: right arm, `Chest`, `Head`, recoil, the reload dip. Runs after the riding pose and claims a disjoint bone set — that split *is* the mounted-shooting blend. |
 | `src/weapons.js` | The procedural revolver, its hand-bone attachment, and the muzzle empty every shot starts from. Generic across skeletons. |
@@ -327,16 +333,22 @@ These are still open:
   poses *were* looked at (screenshots, since deleted), and the gun's hold
   offsets were solved numerically off the live skeleton rather than eyeballed;
   everything else is unwatched. Levers are tabulated in `config-combat.js`.
-- **The support hand does not touch the gun.** There is no IK: the left arm is
-  posed to sit under the right, and the gap between them varies with
-  elevation. It was made worse by the support arm following only half the
-  elevation, which is fixed — but it is a fixed pose, not a solved one.
+- **~~The support hand does not touch the gun~~ Fixed.** Two-bone IK (`ik.js`)
+  now solves the left arm onto a `support` empty on the revolver. Measured: the
+  gap was 0.134 and is now 0.045. The interesting part was *why* fixed angles
+  could never close it — this rig's arm is 0.423 long and the grip sits 0.556
+  from the left shoulder, so the hand could not reach at all until the off
+  shoulder was brought forward (`AIM_POSE.supportShoulder*`), which is what a
+  real shooter does anyway.
 - **`Gun_Shoot` / `Idle_Gun_Shoot` are now dead clips**, by ADR-024's choice.
   If the procedural recoil reads badly on foot, playing `Gun_Shoot` there is
   still available — but it will not work mounted, so that would be two paths.
-- **A collider circle is not a silhouette.** A shot can clip the edge of a
-  rock's collider without visually touching the rock — the same approximation
-  the player already walks into, now visible as a spark in mid-air.
+- **~~A collider circle is not a silhouette~~ Fixed for rocks.** A rock's
+  collider is an upright cylinder at its widest radius — right for walking into,
+  wrong for shooting past, since a round could clip it a metre above the rock's
+  shoulder. Rocks now carry a `meta.hitSphere` that shots use instead
+  (`raycastSphere`), while movement keeps the cylinder. Cacti, trees and
+  buildings are genuinely pillar-shaped and still use the cylinder.
 
 - **Nobody has fought a bandit in real play.** Round 4's whole feel — how fast
   a camp wakes, whether the cover shuffle reads as cover or as milling about,
@@ -346,24 +358,36 @@ These are still open:
   `config-ai.js`. What *was* seen: bandits stand and animate rather than
   T-posing, the revolver is in each man's fist, the tracer and the HUD show,
   and the signal fire reads as a landmark from the spawn plateau 335m away.
-- **The draw-call budget is now genuinely tight.** 39–45 at spawn, **110**
-  with one camp, its fire, the horse and the player on screen, against
-  BUILD-PLAN.md's ~120.
+- **~~The draw-call budget is genuinely tight~~ Much easier now: 34 at spawn,
+  63 with a whole camp** (was 49 and 110), against BUILD-PLAN.md's ~120.
+  `rig-merge.js` did it — see its header. Round 5's town has real headroom;
+  round 7's performance pass still owns the rest.
+  Historical figures, for comparison: 39–45 at spawn, 110 with one camp.
   Merging the revolver's seven parts into one mesh per material took 20 off
   that. Round 5's buildings and round 7's performance pass both have to live
   inside what is left; the camp figure is now a smoke check.
 - **The bandit AI is deliberately dumb in tight spaces** — BUILD-PLAN.md says
   so in as many words. Three forward rays and a sidestep timer, no navmesh.
-- **A dead bandit's body stays forever**, and its Death clip keeps being
-  mixer-updated while the player is within `BANDIT.activeRadius`. No cleanup
-  pass; round 7 can add one if bodies pile up.
-- **Bandits cannot hurt the horse and cannot be ridden down.** Their shots
-  ignore its collider outright (see above) and nothing tests the horse's own
-  health, because it has none.
-- **A bandit fires from the barrel but its aim is a straight line to the
-  player's chest**, with no lead and no allowance for the player moving —
-  which at a gallop means a mounted player is much harder to hit than the
-  spread numbers suggest. Untested by a human.
+- **~~A dead bandit's body stays forever~~ Fixed.** The mixer stops once the
+  Death clip has clamped (`BANDIT.corpseFreezeGrace`), the body lingers, sinks
+  and retires, and `BANDIT.maxCorpses` retires the oldest early rather than
+  letting them pile up. Ageing is driven by the group, not by the bandit's own
+  update, so a body you rode away from is still gone when you come back.
+- **~~Bandits cannot hurt the horse~~ Partly fixed.** A *riderless* horse now
+  has health, is ray-tested as its own cylinder, and bolts when shot up
+  (`HEALTH.horseMax`, `HORSE.spook*`) — it never dies, because stranding the
+  player 300m out is a punishment the game has no answer for. A **mounted**
+  horse is still deliberately untouchable: its collider stays in the bandits'
+  ignore set so shots reach the rider, and the human's play session confirmed
+  the current lethality of a camp reads right. Still true: the horse cannot be
+  ridden down, and nothing gives it a real injury state.
+- **~~A bandit's aim has no lead~~ Fixed, partially by design.** `BANDIT.aimLead`
+  (0.3) leads the target by a fraction of the flight time, and reads the
+  HORSE's velocity when the player is mounted — the player's own is zero while
+  riding, which is why a galloping rider was effectively un-led. Deliberately
+  partial: a man snap-shooting leads badly, and the human has confirmed a camp
+  is already dangerous enough. **0 restores the old behaviour exactly; toward 1
+  makes riding past a camp much harder.** Not yet felt in play at 0.3.
 
 - **Nobody has ridden the horse.** Every feel-related number — AI wander,
   lean-into-turns sign and magnitude, stamina pacing, riding-pose bob and

@@ -23,6 +23,12 @@ import { HORSE } from './config-horse.js';
 export class HorseAI {
   /** @param {object} horse the Horse whose movement this steers while unmounted */
   constructor(horse) {
+    // Bolting after being shot at while riderless. Panic overrides every other
+    // mode, costs no stamina, and blocks being caught until it passes — see
+    // HEALTH.horseMax and HORSE.spook*.
+    this.spookT = 0;
+    this.spookRecoverT = 0;
+    this._spookHeading = 0;
     this.horse = horse;
     this.mode = 'wander'; // 'wander' | 'follow' | 'coming'
     this.whistled = false;
@@ -55,7 +61,27 @@ export class HorseAI {
    * @returns {number} the target speed horse.js should integrate toward. Zero
    *   means "stand still", and horse.js reads that as "do not turn either".
    */
+  /** True while running from something; horse.js refuses mounting and whistles. */
+  get spooked() {
+    return this.spookT > 0;
+  }
+
+  /** Sets it running straight away from (fromX, fromZ). */
+  spook(fromX, fromZ) {
+    this.spookT = HORSE.spookTime;
+    this.spookRecoverT = HORSE.spookRecoverTime;
+    const h = this.horse;
+    this._spookHeading = Math.atan2(-(h.position.x - fromX), -(h.position.z - fromZ)) + Math.PI;
+  }
+
   update(dt, player, outDir) {
+    if (this.spookT > 0) {
+      this.spookT -= dt;
+      outDir.set(-Math.sin(this._spookHeading), 0, -Math.cos(this._spookHeading));
+      return HORSE.gallopSpeed;
+    }
+    if (this.spookRecoverT > 0) this.spookRecoverT -= dt;
+
     const pos = this.horse.position;
 
     if (this.mode === 'coming') {

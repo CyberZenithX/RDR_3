@@ -41,6 +41,7 @@ import { PlaceholderHuman } from './placeholder-human.js';
 import { RidingPose } from './riding-pose.js';
 import { AimPose } from './aim-pose.js';
 import { createRevolver } from './weapons.js';
+import { mergeRigMeshes } from './rig-merge.js';
 import { PLAYER, ANIM, CLIP_REFERENCE_SPEED, CLIP_CANDIDATES } from './config.js';
 
 /**
@@ -78,6 +79,11 @@ class CharacterRig {
   constructor(gltf, spec) {
     this.spec = spec;
     this.root = gltf.scene;
+    // Before anything else reads the meshes: these models are one mesh per
+    // colour (16 of them on a bandit), and each is its own draw call in both
+    // the colour and the shadow pass. See rig-merge.js — it is a no-op on a rig
+    // that has already been merged, which is how bandit clones stay cheap.
+    this.meshMerge = mergeRigMeshes(this.root);
     const measured = measureHeight(this.root);
     this.root.scale.setScalar(measured > 0 ? spec.height / measured : 1);
     enableShadows(this.root);
@@ -131,6 +137,10 @@ class CharacterRig {
     // The revolver is parented into the hand bone, so it lives with the rig
     // rather than with combat.js — which owns when it fires, not where it is.
     this.weapon = createRevolver(this.root);
+    // The aim pose solves the support hand onto the gun, so it needs the gun.
+    // Assigned after construction rather than passed in: the weapon is built
+    // from this same root and the pose has to exist first.
+    this.aim.weapon = this.weapon;
 
     // How high the pelvis rides above the rig's own origin. horse.js's saddle
     // offset is a *seat* height, so player.js places the root this far below it
@@ -274,12 +284,13 @@ class CharacterRig {
    * (BUILD-PLAN.md's respawn), so this cannot be a one-way latch.
    */
   setDead(dead) {
-    if (dead === this._dead) return;
+    if (dead === this._dead) return 0;
     this._dead = dead;
     this._oneShotT = 0;
     if (dead) {
-      this._playOneShot('death', ONE_SHOT.death);
-      return;
+      // Returns how long the clip runs, so the caller can stop updating this
+      // mixer once the body has finished falling — see BANDIT.corpseFreezeGrace.
+      return this._playOneShot('death', ONE_SHOT.death);
     }
     // Back on your feet: the death action is clamped on its last frame, so it
     // has to be stopped outright rather than faded, and `_active` cleared so

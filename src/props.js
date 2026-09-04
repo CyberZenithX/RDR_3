@@ -145,7 +145,7 @@ function makeDeadTreeGeometry(cfg) {
  * about props in general (rocks are jumpable, cacti and trees are not), and
  * round 3's shootable props will want the same label.
  */
-function scatterInstanced(scene, { geometries, material, count, minScale, maxScale, sink, colliderRadius, kind }) {
+function scatterInstanced(scene, { geometries, material, count, minScale, maxScale, sink, colliderRadius, kind, roundedHitShape = false }) {
   const perVariant = geometries.map(() => []);
   // Every geometry here is authored with its base at local y = 0, so its
   // bounding box max is exactly how far the prop stands proud of the point it
@@ -167,7 +167,17 @@ function scatterInstanced(scene, { geometries, material, count, minScale, maxSca
       rotY: rng() * Math.PI * 2, scale,
     });
     const factor = Array.isArray(colliderRadius) ? colliderRadius[variant] : colliderRadius;
-    addCircleCollider(spot.x, spot.z, factor * scale, { kind }, y + variantTops[variant] * scale);
+    const meta = { kind };
+    if (roundedHitShape) {
+      // A rock is a lumpy ball, but its collider is an upright cylinder at the
+      // rock's WIDEST radius, running from the ground up. That is the shape
+      // movement wants; it is the wrong shape for a bullet, which could clip
+      // the cylinder well above the rock's shoulder and throw a spark in open
+      // air. Shots therefore get a sphere that follows the silhouette, while
+      // movement keeps the cylinder. See combat-ray.js's raycastColliders.
+      meta.hitSphere = { cy: y + variantTops[variant] * scale * 0.5, r: factor * scale };
+    }
+    addCircleCollider(spot.x, spot.z, factor * scale, meta, y + variantTops[variant] * scale);
     placed++;
   }
 
@@ -219,6 +229,7 @@ export function buildProps(scene) {
     geometries: rockGeos, material: rockMat, count: PROPS.rock.count,
     minScale: PROPS.rock.minScale, maxScale: PROPS.rock.maxScale,
     sink: PROPS.rock.sinkFactor, colliderRadius: PROPS.rock.colliderFactors, kind: 'rock',
+    roundedHitShape: true, // rocks are balls, not pillars — see scatterInstanced
   });
   const cacti = scatterInstanced(scene, {
     geometries: cactusGeos, material: cactusMat, count: PROPS.cactus.count,
