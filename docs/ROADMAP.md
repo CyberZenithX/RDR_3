@@ -22,6 +22,11 @@ Rounds 0, 1, 2, 2b, 2c, 2d, 3, 4, 5 are done. Round 6 is next.
   one merged, vertex-coloured mesh (ADR-033) and the budget has headroom
   precisely because of that. `town-geo.js`'s `PartBuilder` is the tool; three
   smoke checks watch the number.
+- **A bounty board needs lettering, and lettering already exists.**
+  `signs.js` draws the whole town's signage into one canvas atlas and
+  `PartBuilder`'s `textured` mode puts it on a quad. A board listing three camp
+  names is that, with `CAMPS` supplying the strings instead of `BUILDINGS` —
+  join the atlas rather than starting a second textured mesh.
 - **Townsfolk already carry `Health` and can be shot** (ADR-034), which is the
   whole foundation of the wanted level: `townsfolk.hit()` returns
   `'hit' | 'dead'` and `combat.js` already dispatches on `kind === 'townsfolk'`.

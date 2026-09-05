@@ -546,6 +546,21 @@ than a draw call issued needlessly. `town-geo.js`'s `PartBuilder` is the tool,
 and it is reusable — round 6's bounty board and round 7's props should go through
 it rather than adding meshes.
 
+**The shop signs are the third mesh, and the same argument put twice.** The
+human's note on the first pass was that it was "hard to even identify what each
+building is supposed to be": every sign was a blank coloured board. Lettering
+needs a texture, and a textured surface cannot join a merge whose material has
+no `map` and whose geometry has no UVs — so ten signs would have been ten
+materials, ten meshes and ten more shadow draws.
+
+Instead every sign's face is drawn into ONE canvas atlas (`signs.js`), one
+horizontal strip per building, and each sign quad is given UVs pointing at its
+own strip. `PartBuilder` gained a `textured` mode that keeps `uv` and drops
+`color`; the signs go into their own builder and their own merge, and **the
+whole town's signage is one draw call**. The board colour is baked into the
+cell behind the lettering, so the quad is opaque — no blending, no sorting, no
+second pass. Measured: 55 draw calls became 56.
+
 ---
 
 ### ADR-034 — Townsfolk are `player.glb` with cloned materials — *Accepted*

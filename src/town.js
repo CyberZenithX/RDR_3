@@ -24,7 +24,8 @@
 import { TOWN } from './config.js';
 import { BUILDINGS, DOOR, HITCH, TOWN_BUILD } from './config-town.js';
 import { PartBuilder } from './town-geo.js';
-import { buildBuilding, buildSaloonInterior } from './buildings.js';
+import { buildSignAtlas } from './signs.js';
+import { buildBuilding, buildSaloonInterior, signBoardSize } from './buildings.js';
 import { buildTownProps, StreetLamps } from './town-props.js';
 import { buildTownsfolk } from './townsfolk.js';
 
@@ -35,10 +36,23 @@ class Town {
 
     const opaque = new PartBuilder();
     const glass = new PartBuilder();
-    const ctx = { opaque, glass };
+    // Textured, so it keeps UVs and carries no vertex colour — the shop signs
+    // are the one part of the town with a `map`. Drawn BEFORE any building,
+    // because it is what supplies each sign quad's UVs.
+    const signs = new PartBuilder({ textured: true });
+    this.signAtlas = buildSignAtlas(BUILDINGS.map((spec) => {
+      const size = signBoardSize(spec);
+      return {
+        // `signText` where the name alone does not say what the place IS.
+        text: spec.signText ?? spec.name,
+        background: spec.sign,
+        aspect: size.w / size.h,
+      };
+    }));
+    const ctx = { opaque, glass, signs, atlas: this.signAtlas };
 
     /** @type {object[]} every building's resolved placement, in BUILDINGS order. */
-    this.buildings = BUILDINGS.map((spec) => buildBuilding(spec, ctx));
+    this.buildings = BUILDINGS.map((spec, i) => buildBuilding(spec, ctx, i));
     this.saloon = this.buildings.find((b) => b.spec.interior) ?? null;
     if (this.saloon) buildSaloonInterior(this.saloon, ctx);
     buildTownProps(ctx);
@@ -48,6 +62,11 @@ class Town {
     this.glassMesh = glass.finish(scene, {
       name: 'town-glass', roughness: 0.25, metalness: 0.1,
       transparent: true, opacity: 0.42, castShadow: false,
+    });
+    // No shadow: the lettering sits 14mm off a board it exactly covers, and a
+    // coplanar caster is a shadow-map fight for nothing.
+    this.signMesh = signs.finish(scene, {
+      name: 'town-signs', roughness: 0.82, map: this.signAtlas.texture, castShadow: false,
     });
 
     /** Where the horse waits — horse.setHitchPost() takes this straight. */
@@ -59,7 +78,8 @@ class Town {
 
     // Door-trigger state.
     this.inside = false;
-    this.placeName = null;
+    this.placeName = null; // the building you are INSIDE, or null
+    this.signName = null; // ...or the one whose frontage you are standing at
     this.fade = 0; // 0..1 screen opacity; ui.js renders it
     this._phase = 'none'; // 'none' | 'out' | 'hold' | 'in'
     this._phaseT = 0;
@@ -69,6 +89,7 @@ class Town {
       buildings: this.buildings.length,
       lamps: this.lamps.lights.length,
       townsfolk: townsfolk?.count ?? 0,
+      signs: this.signAtlas.count,
       parts: this.mesh ? this.mesh.geometry.attributes.position.count : 0,
     };
   }
@@ -94,6 +115,40 @@ class Town {
     return Math.abs(lx) <= hw - margin && lz >= -hd + margin && lz <= hd;
   }
 
+  /**
+   * What the HUD should call where the player is standing: the room they are in,
+   * or the shop whose frontage they are at, or nothing.
+   *
+   * The painted sign is the real answer to "what is this place" — this is the
+   * backstop for standing under an awning, where the sign is directly overhead
+   * and out of shot.
+   */
+  get label() {
+    return this.placeName ?? this.signName;
+  }
+
+  /** Nearest building frontage the player is standing at, or null. */
+  _frontageName(x, z) {
+    const t = TOWN_BUILD;
+    let best = null;
+    let bestDist = Infinity;
+    for (const b of this.buildings) {
+      const dx = x - b.cx;
+      const dz = z - b.cz;
+      // World → the building's own frame, same convention as its box colliders.
+      const c = Math.cos(b.yaw);
+      const sn = Math.sin(b.yaw);
+      const lx = dx * c - dz * sn;
+      const lz = dx * sn + dz * c;
+      // In front of the frontage, not beside it and not round the back.
+      const depth = -(lz - b.frontZ);
+      if (depth < 0 || depth > t.labelRange) continue;
+      if (Math.abs(lx) > b.spec.w / 2 + t.labelSideMargin) continue;
+      if (depth < bestDist) { bestDist = depth; best = b.spec.name; }
+    }
+    return best;
+  }
+
   /** World Y of the saloon's floorboards. */
   get saloonFloorY() {
     return TOWN.height + TOWN_BUILD.floorStep;
@@ -111,6 +166,7 @@ class Town {
       player.position.x, player.position.z,
       this.inside ? -DOOR.deadBand : DOOR.deadBand,
     );
+    this.signName = player.dead ? null : this._frontageName(player.position.x, player.position.z);
     this._cooldown = Math.max(0, this._cooldown - dt);
     if (insideNow !== this.inside) {
       this.inside = insideNow;

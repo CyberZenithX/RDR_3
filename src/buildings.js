@@ -27,7 +27,7 @@
  */
 
 import { TOWN } from './config.js';
-import { STREET, TOWN_BUILD, TOWN_COLORS, SALOON } from './config-town.js';
+import { STREET, TOWN_BUILD, TOWN_COLORS, SALOON, SIGNS } from './config-town.js';
 import { addBoxCollider } from './collision.js';
 import { addFloorPlate } from './terrain.js';
 
@@ -56,6 +56,16 @@ function localFloorPlate(b, lx, lz, w, d, y) {
   return addFloorPlate(p.x, p.z, w, d, b.yaw, y);
 }
 
+/**
+ * The painted board's size. Exported because the sign ATLAS has to be drawn
+ * before any building is built (it supplies the UVs), and it needs each board's
+ * aspect ratio to draw undistorted lettering — so this one calculation has two
+ * callers and must not be written twice.
+ */
+export function signBoardSize(spec) {
+  return { w: Math.min(spec.w * 0.78, 6.4), h: TOWN_BUILD.signHeight };
+}
+
 /** Evenly spaced offsets across a frontage of `w`, `n` of them, inset from the corners. */
 function spread(w, n, inset) {
   const out = [];
@@ -69,14 +79,16 @@ function spread(w, n, inset) {
  * Builds one building into the shared opaque and glass builders.
  *
  * @param {object} spec an entry from `BUILDINGS`
- * @param {object} ctx `{ opaque, glass }` — two `PartBuilder`s, because glass
- *   needs a transparent material and therefore its own merged mesh.
+ * @param {object} ctx `{ opaque, glass, signs, atlas }` — three `PartBuilder`s,
+ *   because glass needs a transparent material and the signs need a textured
+ *   one, and neither can share the opaque merge.
+ * @param {number} index this building's row in the sign atlas.
  * @returns {object} the placement plus the pieces other systems need: the
  *   interior box (the saloon's, for the door trigger) and the frontage.
  */
-export function buildBuilding(spec, ctx) {
+export function buildBuilding(spec, ctx, index = 0) {
   const t = TOWN_BUILD;
-  const { opaque, glass } = ctx;
+  const { opaque, glass, signs, atlas } = ctx;
   const { cx, cz, yaw } = resolvePlacement(spec);
   const baseY = TOWN.height; // the plateau is dead flat inside TOWN.halfSize
   const baseH = spec.stoneBase ? 0.5 : t.floorStep;
@@ -201,8 +213,17 @@ export function buildBuilding(spec, ctx) {
   }
 
   // ---------------------------------------------------------------- sign ---
-  const signW = Math.min(w * 0.78, 6.4);
+  const signW = signBoardSize(spec).w;
+  const boardFace = front - t.signThickness - 0.03;
   opaque.box(signW, t.signHeight, t.signThickness, 0, signY, front - t.signThickness / 2 - 0.03, spec.sign);
+  // The lettering: one quad over the board's outer face, its UVs pointing at
+  // this building's row of the shared atlas. A blank coloured board is not a
+  // shop sign — see SIGNS in config-town.js. Costs nothing but a quad; the
+  // whole town's signage is one draw call (signs.js).
+  if (signs && atlas) {
+    signs.setFrame(cx, baseY, cz, yaw);
+    signs.facePlate(signW, t.signHeight, 0, signY, boardFace - SIGNS.faceOffset, atlas.uvFor(index));
+  }
   opaque.box(signW + 0.16, 0.09, t.signThickness + 0.04, 0, signY + t.signHeight / 2 + 0.05, front - t.signThickness / 2 - 0.03, TOWN_COLORS.trim);
   opaque.box(signW + 0.16, 0.09, t.signThickness + 0.04, 0, signY - t.signHeight / 2 - 0.05, front - t.signThickness / 2 - 0.03, TOWN_COLORS.trim);
 

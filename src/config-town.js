@@ -76,6 +76,13 @@ export const TOWN_BUILD = {
   crossBar: 0.75,
   crossThickness: 0.12,
   stepDepth: 0.6, // church front steps
+  // How close to a frontage you have to be for the HUD to name the building.
+  // The painted sign is the real answer to "what is this place"; this is the
+  // backstop for standing under an awning where the sign is directly overhead.
+  // Deliberately SHORT: at 8 it reached the middle of the street and named a
+  // shop you were merely walking past, which is a different claim.
+  labelRange: 4.5,
+  labelSideMargin: 1.5,
   segments: 8, // radial segments on posts and spires
 };
 
@@ -101,6 +108,41 @@ export const TOWN_COLORS = {
 };
 
 /**
+ * The painted lettering on the shop signs — `signs.js` draws all of it into one
+ * canvas atlas, so the whole town's signage is one draw call.
+ *
+ * A blank coloured board is not a shop sign: the human's note after the first
+ * pass was that it is "hard to even identify what each building is supposed to
+ * be", and they were right — every building was distinguishable only by the
+ * colour of a rectangle.
+ *
+ * There is no font to fetch here (docs/ASSETS.md), so this is whatever serif the
+ * browser already has, tracked out by hand and shrunk to fit its board.
+ */
+export const SIGNS = {
+  cellWidth: 1024, // one 8:1 strip of the atlas per sign
+  cellHeight: 128,
+  fontFamily: 'Georgia, "Times New Roman", "Liberation Serif", serif',
+  fontWeight: 'bold',
+  maxFontSize: 92,
+  minFontSize: 30,
+  padding: 46, // horizontal breathing room inside a cell
+  tracking: 0.07, // extra letter spacing, in em — this is most of the period feel
+  baselineNudge: 2, // px; optical centring beats metric centring on capitals
+  inkLight: 0xf4e8cc,
+  inkDark: 0x241b12,
+  inkLuminanceThreshold: 0.62, // above this the board is light, so use dark ink
+  shadowOffset: 3,
+  shadowAlpha: 0.34,
+  borderColor: 0x000000,
+  borderAlpha: 0.22,
+  borderWidth: 5,
+  borderInset: 11,
+  anisotropy: 8, // a sign is nearly always seen at a grazing angle down the street
+  faceOffset: 0.014, // how far the painted face stands proud of the board
+};
+
+/**
  * The ten buildings, **hand-placed**. BUILD-PLAN.md: "Place buildings by hand
  * from a coordinate list in config.js, not procedurally. Ten hand-placed
  * buildings look like a town; ten scattered ones look like a bug."
@@ -118,7 +160,10 @@ export const TOWN_COLORS = {
  */
 export const BUILDINGS = [
   {
-    kind: 'saloon', name: 'The Iron Horse', side: 'west', z: 16,
+    // `signText` overrides `name` on the board: "The Iron Horse" is what the
+    // place is called, "THE IRON HORSE SALOON" is what tells you what it is —
+    // which is the entire point of putting lettering up there.
+    kind: 'saloon', name: 'The Iron Horse', signText: 'The Iron Horse Saloon', side: 'west', z: 16,
     w: 18, d: 14, wallHeight: 3.9, storeys: 2,
     interior: true, porch: true, falseFront: true, windows: 3,
     wall: 0x8a6a45, sign: 0xb5541f,
@@ -300,75 +345,6 @@ export const LAMPS = {
     { x: -16, y: 2.6, z: 12.5, intensity: 40, distance: 8.5, color: 0xffc27a }, // saloon, over the tables
     { x: -16, y: 2.6, z: 20, intensity: 40, distance: 8.5, color: 0xffc27a }, // saloon, over the bar end
     { x: -8.4, y: 3.1, z: 16, intensity: 18, distance: 7, color: 0xffb867 }, // over the saloon porch
-  ],
-};
-
-/**
- * Idle townsfolk. BUILD-PLAN.md: "Idle townsfolk NPCs that wander a short
- * patrol and turn to look at you when you pass."
- *
- * They are `player.glb`, not `bandit.glb`, and that is a deliberate choice
- * rather than a coin toss: there is no third humanoid to fetch (docs/ASSETS.md),
- * and dressing the townsfolk in the enemy silhouette would have five men who
- * read as bandits standing in the middle of town. Each one clones its own
- * MATERIALS (not its geometry) and multiplies a `tint` through them, which is
- * safe precisely where recolouring a bandit is not — a bandit shares one
- * material by reference across eleven bodies (rig-clone.js), a townsperson owns
- * its own copies.
- *
- * They carry `Health` and are shootable, per docs/ROADMAP.md: round 6's wanted
- * level is built on shooting innocents, and an invulnerable prop is a worse
- * starting point than a man who can be shot.
- */
-export const TOWNSFOLK = {
-  modelPath: '/models/player.glb',
-  modelHeight: 1.82,
-  meshYawOffset: Math.PI, // same asset family as the player, so the same value
-  radius: 0.36,
-  colliderRadius: 0.4,
-  hitRadius: 0.34,
-  chestHeight: 1.28,
-  maxHealth: 2,
-
-  walkSpeed: 1.15, // a stroll, not a patrol
-  acceleration: 10,
-  deceleration: 14,
-  turnRate: 6,
-  lookTurnRate: 4.5,
-
-  patrolRadius: 4.5,
-  patrolIntervalMin: 3.5,
-  patrolIntervalMax: 9.0,
-  patrolArriveDistance: 0.8,
-  pauseMin: 1.5, // they stand still between strolls — they are idling, not marching
-  pauseMax: 5.0,
-
-  /** Inside this they stop and turn to watch you go past. */
-  lookRadius: 9,
-  lookHoldTime: 1.6, // ...and keep watching this long after you leave it
-
-  /** Gunfire this close sends them running. */
-  panicHearingRange: 45,
-  panicTime: 9,
-  panicSpeed: 3.6,
-
-  activeRadius: 130, // past this they are frozen mid-idle, exactly as bandits are
-
-  tints: [
-    0xffffff,
-    0xd8c9b4,
-    0xc9b8a0,
-    0xe6d2b8,
-    0xb9ad9a,
-  ],
-
-  /** Where each one idles. Anchors, not paths — the wander is around these. */
-  spawns: [
-    { x: -9.0, z: 21, tint: 0 }, // on the saloon's boardwalk
-    { x: -5.5, z: -6, tint: 1 }, // outside the general store
-    { x: 9.0, z: 22, tint: 2 }, // outside the sheriff's office
-    { x: 2.0, z: 8, tint: 3 }, // crossing the street
-    { x: -7.5, z: -27, tint: 4 }, // by the stable
   ],
 };
 

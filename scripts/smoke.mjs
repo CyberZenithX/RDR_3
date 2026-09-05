@@ -2545,27 +2545,119 @@ const CHECKS = [
     return null;
   }],
 
-  ['the town is two merged meshes, not one per building', async () => {
+  ['the town is three merged meshes, not one per building', async () => {
     // The draw-call discipline docs/ROADMAP.md asked for, asserted structurally
     // rather than by watching the number: ten buildings, eight lamps, the
-    // boardwalks, the rail and a saloon's furniture all land in ONE opaque mesh
-    // plus one for the glass. See town-geo.js.
+    // boardwalks, the rail and a saloon's furniture all land in ONE opaque mesh,
+    // plus one for the glass and one for every painted sign in town. See
+    // town-geo.js, and ADR-033.
     const info = await page.evaluate(() => {
       const t = window.__debug.town;
-      let named = 0;
-      window.__debug.scene.traverse((o) => { if (o.isMesh && o.name.startsWith('town')) named++; });
+      const named = [];
+      window.__debug.scene.traverse((o) => { if (o.isMesh && o.name.startsWith('town')) named.push(o.name); });
       return {
         named,
         verts: t.mesh ? t.mesh.geometry.attributes.position.count : 0,
         hasColor: !!t.mesh?.geometry.attributes.color,
         vertexColors: !!t.mesh?.material.vertexColors,
         glass: !!t.glassMesh,
+        signMap: !!t.signMesh?.material.map,
+        signUv: !!t.signMesh?.geometry.attributes.uv,
+        signColor: !!t.signMesh?.geometry.attributes.color,
       };
     });
-    if (info.named !== 2) return `${info.named} meshes named "town*" — expected exactly 2 (opaque + glass)`;
+    if (info.named.length !== 3) {
+      return `${info.named.length} meshes named "town*" (${info.named.join(', ')}) — expected exactly 3 (opaque + glass + signs)`;
+    }
     if (!(info.verts > 2000)) return `the merged town mesh has only ${info.verts} vertices — the merge dropped most of it`;
     if (!info.hasColor || !info.vertexColors) return 'the merged mesh has no vertex colours, so every part would render white';
     if (!info.glass) return 'no glass mesh — the windows did not merge';
+    if (!info.signMap) return 'the sign mesh has no texture map — the lettering never reached it';
+    if (!info.signUv) return 'the sign mesh has no UVs, so every sign shows the same corner of the atlas';
+    if (info.signColor) return 'the sign mesh carries a colour attribute as well as a map — the two builders got mixed';
+    return null;
+  }],
+
+  ['every building has its name painted on its sign', async () => {
+    // The human's note after the first pass: "it is hard to even identify what
+    // each building is supposed to be." Every sign was a blank coloured board.
+    //
+    // Reading pixels back out of the atlas is what makes this a check on the
+    // CONTENT rather than on the plumbing — docs/TESTING.md rule 1b, the lesson
+    // round 3's three-gunshot audio file taught. A cell that is one flat colour
+    // has no lettering on it, however correctly it is wired up.
+    const info = await page.evaluate(async () => {
+      const { BUILDINGS, SIGNS } = await import('/src/config-town.js');
+      const t = window.__debug.town;
+      const atlas = t.signAtlas;
+      const canvas = atlas.texture.image;
+      const ctx = canvas.getContext('2d');
+      const rows = [];
+      for (let i = 0; i < atlas.count; i++) {
+        // Sample the middle band of the cell, inside the painted border, and
+        // count how many distinct luminances appear: a blank board is one.
+        const y = i * SIGNS.cellHeight + Math.floor(SIGNS.cellHeight * 0.3);
+        const h = Math.floor(SIGNS.cellHeight * 0.4);
+        const d = ctx.getImageData(SIGNS.padding, y, SIGNS.cellWidth - SIGNS.padding * 2, h).data;
+        const seen = new Set();
+        let min = 255;
+        let max = 0;
+        for (let p = 0; p < d.length; p += 4) {
+          const l = Math.round((d[p] * 0.299 + d[p + 1] * 0.587 + d[p + 2] * 0.114));
+          seen.add(l >> 3);
+          if (l < min) min = l;
+          if (l > max) max = l;
+        }
+        rows.push({ name: BUILDINGS[i].signText ?? BUILDINGS[i].name, tones: seen.size, contrast: max - min });
+      }
+      // ...and the UVs must actually differ per sign, or every board shows the
+      // same row of the atlas.
+      const uvs = [];
+      for (let i = 0; i < atlas.count; i++) uvs.push(atlas.uvFor(i).v0.toFixed(4));
+      return {
+        rows, unique: new Set(uvs).size, count: atlas.count,
+        buildings: BUILDINGS.length,
+        width: canvas.width, height: canvas.height,
+      };
+    });
+    if (info.count !== info.buildings) return `${info.count} atlas cells for ${info.buildings} buildings`;
+    if (info.unique !== info.count) return `${info.unique} distinct UV rows for ${info.count} signs — some boards share a cell`;
+    for (const r of info.rows) {
+      if (r.tones < 3) return `the "${r.name}" sign is a flat board (${r.tones} tones) — nothing was painted on it`;
+      if (r.contrast < 60) return `the "${r.name}" sign's lettering has only ${r.contrast} levels of contrast against its board`;
+    }
+    return null;
+  }],
+
+  ['the HUD names the building you are standing in front of', async () => {
+    const info = await page.evaluate(async () => {
+      const d = window.__debug;
+      const t = d.town;
+      const p = d.player;
+      const saved = { x: p.position.x, y: p.position.y, z: p.position.z };
+      const read = (b, out) => {
+        // Two metres off the frontage, on its centre line — where a player
+        // walking the boardwalk stands.
+        const sin = Math.sin(b.yaw);
+        const cos = Math.cos(b.yaw);
+        const lz = b.frontZ - out;
+        p.position.set(b.cx + lz * sin, t.saloonFloorY, b.cz + lz * cos);
+        t.update(1 / 60, p);
+        return t.label;
+      };
+      const rows = t.buildings.map((b) => ({ want: b.spec.name, got: read(b, 2) }));
+      // ...and the middle of the street belongs to nobody.
+      p.position.set(0, t.saloonFloorY, 30);
+      t.update(1 / 60, p);
+      const street = t.label;
+      p.position.set(saved.x, saved.y, saved.z);
+      t.update(1 / 60, p);
+      return { rows, street };
+    });
+    for (const r of info.rows) {
+      if (r.got !== r.want) return `standing at the ${r.want} the HUD said ${JSON.stringify(r.got)}`;
+    }
+    if (info.street !== null) return `standing in the middle of the street the HUD said ${JSON.stringify(info.street)}`;
     return null;
   }],
 
@@ -2774,7 +2866,7 @@ const CHECKS = [
     // Driven at a fixed step: the stroll/pause cycle is seconds long and
     // headless buys ~0.045s of sim per real second (gotcha 2b).
     const info = await page.evaluate(async () => {
-      const { TOWNSFOLK } = await import('/src/config-town.js');
+      const { TOWNSFOLK } = await import('/src/config-townsfolk.js');
       const d = window.__debug;
       const folk = d.town.townsfolk;
       const p = d.player;
@@ -2829,7 +2921,7 @@ const CHECKS = [
     const info = await page.evaluate(async () => {
       const THREE = await import('three');
       const { makeHit, resetHit } = await import('/src/combat-ray.js');
-      const { TOWNSFOLK } = await import('/src/config-town.js');
+      const { TOWNSFOLK } = await import('/src/config-townsfolk.js');
       const folk = window.__debug.town.townsfolk;
       const victim = folk.people.find((p) => p.alive);
       const out = makeHit();

@@ -31,7 +31,7 @@
  */
 
 import * as THREE from 'three';
-import { TOWNSFOLK } from './config-town.js';
+import { TOWNSFOLK } from './config-townsfolk.js';
 import { HEALTH } from './config-ai.js';
 import { loadGLTF } from './assets.js';
 import { createRigFromGLTF } from './character.js';

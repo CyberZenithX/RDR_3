@@ -742,6 +742,18 @@ geometry; these are the things only a person can judge.
    the mesa behind it. Watch for a building that looks stamped on the ground
    rather than standing on it, a roof that does not meet its walls, or a gap
    between a boardwalk and the dirt.
+9b. **Every sign says what the building is.** THE IRON HORSE SALOON, GUNSMITH,
+   SHERIFF'S OFFICE and so on, painted on the boards. **Judge the range at which
+   they become readable** — walking in from spawn you should be able to pick out
+   the saloon before you reach the street. If they are mush at distance, the
+   lever is `SIGNS` in `config-town.js` (`maxFontSize`, `tracking`,
+   `shadowAlpha`), and the boards themselves scale with `TOWN_BUILD.signHeight`.
+   Also check no sign is squeezed or stretched, and that the lettering sits flat
+   on its board rather than flickering against it at a distance.
+9c. **The HUD names the building you are standing at.** Step onto a boardwalk:
+   a small caption should name the shop, and clear when you walk back into the
+   street. It is a backstop for standing under an awning where the sign is
+   directly overhead — if it feels noisy, `TOWN_BUILD.labelRange` is the lever.
 10. **The saloon.** Walk in through the batwing doors — no gap you have to aim
     for, no invisible wall, and no step you trip on. Inside: a bar with bottles,
     tables and stools, and enough light to see them by. **The two things to

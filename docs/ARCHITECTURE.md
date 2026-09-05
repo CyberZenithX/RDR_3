@@ -170,16 +170,28 @@ builders, wires `update(playerPos)` (shadow follow + grass recenter), exposes
 ### Town
 
 `src/town.js` — the orchestrator, world.js's role for round 5. Owns no geometry:
-it runs `buildings.js`, `town-props.js` and `townsfolk.js` into two shared part
-builders, `finish()`es them, and owns the two things that belong to the town as
+it draws the sign atlas, runs `buildings.js`, `town-props.js` and
+`townsfolk.js` into three shared part builders (opaque, glass, signs),
+`finish()`es them, and owns the two things that belong to the town as
 a whole — the saloon's **door trigger** (`inside`, `placeName`, `fade`, a metered
 black-out with a dead band and a cooldown; `DOOR.enabled = false` switches it
 off without touching the doorway) and the **hitching post** the horse waits at
 (`town.hitch`, handed to `horse.setHitchPost()` by main.js). `buildTown()` never
 rejects.
 
+`src/signs.js` — `buildSignAtlas()`: every shop's lettering drawn into ONE
+canvas, one horizontal strip per building, with the board colour baked in
+behind it (so the quad is opaque and needs no blending or sorting). Ink is
+picked light-or-dark from the board's luminance, the string is tracked out by
+hand and shrunk to fit, and each cell is drawn through a horizontal scale that
+cancels the difference between the cell's fixed 8:1 and the board's real
+aspect. **There is no font to fetch** (docs/ASSETS.md) — this is whatever serif
+the browser already has.
+
 `src/town-geo.js` — `PartBuilder`: the vertex-coloured box/cylinder/cone/prism/
-pyramid pushers, a local **frame** (`setFrame(x, y, z, yaw)`, so a building is
+pyramid pushers, `facePlate()` (an atlas-UV'd quad facing local -Z), a
+`textured` mode that keeps `uv` and drops `color` for the signs, a local
+**frame** (`setFrame(x, y, z, yaw)`, so a building is
 authored in its own space with its front at local -Z), and `finish()`, which
 merges everything pushed into one mesh. This is why the whole town is **two draw
 calls** — ADR-033. Reusable: round 6's bounty board and round 7's props should go
@@ -462,11 +474,15 @@ markup lives in `index.html` — the one exception is the ammo pips, built from
 `CLIP_CANDIDATES`, `JUMP`, `PLACEHOLDER`, `CAMERA`, `INPUT`, `PROPS`, `GRASS`,
 `UI`. `JUMP` is placeholder-only fallback pose constants.
 
-`src/config-town.js` — every round-5 tunable: `STREET`, `TOWN_BUILD`,
-`TOWN_COLORS`, `BUILDINGS` (the hand-placed coordinate list), `SALOON`,
-`HITCH`, `LAMPS`, `TOWNSFOLK`, `DOOR`. The fifth config file. `TOWN` — the
+`src/config-town.js` — the town's built fabric: `STREET`, `TOWN_BUILD`,
+`TOWN_COLORS`, `SIGNS`, `BUILDINGS` (the hand-placed coordinate list),
+`SALOON`, `HITCH`, `LAMPS`, `DOOR`. The fifth config file. `TOWN` — the
 plateau the town stands on — stays in `config.js`, because the plateau is a
 property of the terrain.
+
+`src/config-townsfolk.js` — `TOWNSFOLK`, and nothing else. The sixth config
+file, split from the one above on exactly the seam `config-ai.js` was cut on:
+the bandits are a system with their own file and so are the citizens.
 
 `src/config-horse.js` — every horse tunable: `HORSE`, `HORSE_ANIM`,
 `HORSE_CLIP_CANDIDATES`, `HORSE_CLIP_REFERENCE_SPEED`, `RIDING_POSE`, `TACK`,
@@ -614,8 +630,10 @@ resolveCollisions(pos, radius, ignore, clearY)
   `hearShot(x, z)` / `aliveCount` / `states` / `rayIgnore` / `camps`. Same
   contract as `Targets`, so `combat.js` tests both against one hit record.
 - `Town.hitch` (`{x, z, yaw, callRadius, arriveDistance, railX, railZ}`) /
-  `isInsideSaloon(x, z, margin)` / `saloonFloorY` / `inside` / `placeName` /
-  `fade` / `buildings` / `saloon` / `lamps` / `townsfolk` / `counts`.
+  `isInsideSaloon(x, z, margin)` / `saloonFloorY` / `inside` / `placeName`
+  (the room you are *in*) / `signName` (the frontage you are *at*) / `label`
+  (what the HUD shows: the first of those two that is set) / `fade` /
+  `buildings` / `saloon` / `lamps` / `townsfolk` / `signAtlas` / `counts`.
   `town.update(dt, player)` is the whole per-frame surface.
 - `Horse.setHitchPost(point)` — the sanctioned public entry point (ADR-011);
   `horse.ai.mode` gains `'hitched'` and `horse.ai.holdYaw` is the yaw a
@@ -695,11 +713,12 @@ existed only while there was a retargeted player jump clip.
 - **Camera `lookAt` is recomputed instantly from a damped position**, not
   itself damped — could look slightly swimmy for a frame or two right after a
   big obstruction-triggered zoom-in. Not visually confirmed; minor.
-- **The draw-call budget has real headroom again.** 58 at spawn, **55**
-  standing in the middle of the street, 63 with a whole camp on screen, against
-  BUILD-PLAN.md's ~120. `rig-merge.js` (round 4) and the town's single merged
-  mesh (ADR-033) are why; the town itself costs about four calls. Three smoke
-  checks sample it — at spawn, at a camp, and down the main street.
+- **The draw-call budget has real headroom.** 58 at spawn, **56** standing in
+  the middle of the street, 63 with a whole camp on screen, against
+  BUILD-PLAN.md's ~120. `rig-merge.js` (round 4) and the town's merged meshes
+  (ADR-033) are why; the whole town — buildings, lamps, boardwalks, furniture
+  and every painted sign — costs about five calls. Three smoke checks sample
+  it: at spawn, at a camp, and down the main street.
 - **Three `PointLight`s exist now** (two in the saloon, one over its porch).
   Every one is compiled into every standard material's shader in the scene, so
   that number is a budget in its own right — it cost about 10% of frame rate in

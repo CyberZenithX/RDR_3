@@ -426,9 +426,19 @@ The last three sample the arc from **inside** the render loop.
 - ten hand-placed buildings, all five that BUILD-PLAN.md names by name, every
   footprint on flat plateau (height spread sampled over its own corners) and
   inside `TOWN.halfSize`
-- the whole town is **two** meshes (opaque + glass) carrying vertex colours,
-  which is ADR-033's draw-call discipline asserted structurally rather than by
-  watching a number — plus a third draw-call budget sample, down the main street
+- the whole town is **three** meshes (opaque + glass + signs), the first two
+  carrying vertex colours and the third a `map` and UVs and neither of the
+  other's attributes — ADR-033's draw-call discipline asserted structurally
+  rather than by watching a number — plus a third draw-call budget sample, down
+  the main street
+- **every building has its name painted on its sign**, checked by reading
+  pixels back out of the atlas canvas: a cell that is one flat tone has no
+  lettering on it however correctly it is wired up. This is rule 1b applied to
+  a generated asset rather than a downloaded one — "the texture exists" is not
+  "the texture says anything". It also asserts the UV rows are distinct, since
+  ten boards sharing one cell would render ten identical signs
+- the HUD names the building whose frontage you are standing at, for every one
+  of the ten, and names nothing from the middle of the street
 - **a box collider pushes an agent out along its own axes**, tested at a
   deliberately NON-cardinal yaw. `resolveBox`'s first caller in four rounds,
   and the only thing that can see a sign error in the rotation convention:

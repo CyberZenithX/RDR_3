@@ -37,9 +37,24 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 const _color = new THREE.Color();
 
 /** Every geometry pushed here must agree on its attribute set, or the merge refuses. */
-function normalise(geo, color) {
-  // No part of the town is textured, so uv is dead weight that would also have
-  // to match across every merged part. Same reasoning as rig-merge.js.
+function normalise(geo, color, textured) {
+  if (textured) {
+    // A textured builder is the mirror image: it keeps `uv` and carries no
+    // colour, because its material has a `map` instead. The two attribute sets
+    // must never mix inside one builder — mergeGeometries requires them
+    // identical — which is why `textured` is a property of the BUILDER rather
+    // than an argument to a push.
+    geo.deleteAttribute('color');
+    if (!geo.index) {
+      const m = geo.attributes.position.count;
+      const idx = new Uint16Array(m);
+      for (let i = 0; i < m; i++) idx[i] = i;
+      geo.setIndex(new THREE.BufferAttribute(idx, 1));
+    }
+    return geo;
+  }
+  // Nothing else in the town is textured, so uv is dead weight that would also
+  // have to match across every merged part. Same reasoning as rig-merge.js.
   geo.deleteAttribute('uv');
   const count = geo.attributes.position.count;
   const arr = new Float32Array(count * 3);
@@ -65,7 +80,15 @@ function normalise(geo, color) {
 }
 
 export class PartBuilder {
-  constructor() {
+  /**
+   * @param {{textured?:boolean}} opts a **textured** builder keeps `uv` and
+   *   drops `color`, for parts whose material carries a `map` — round 5's shop
+   *   signs are the only ones. It is a separate builder, and therefore a
+   *   separate merged mesh and one more draw call, because the two attribute
+   *   sets cannot share a merge.
+   */
+  constructor({ textured = false } = {}) {
+    this.textured = textured;
     /** @type {THREE.BufferGeometry[]} */
     this.parts = [];
     this._frame = new THREE.Matrix4();
@@ -105,7 +128,7 @@ export class PartBuilder {
    * into the world. The geometry is consumed — do not reuse it.
    */
   push(geo, color) {
-    normalise(geo, color);
+    normalise(geo, color, this.textured);
     geo.applyMatrix4(this._frame);
     this.parts.push(geo);
     return this;
@@ -194,6 +217,29 @@ export class PartBuilder {
     return this.push(g, color);
   }
 
+  /**
+   * A flat quad in the local XY plane facing local **-Z** (a building's own
+   * front), with its UVs remapped onto one rectangle of a texture atlas.
+   *
+   * Facing -Z rather than +Z is not cosmetic: every building here is authored
+   * with its front wall at local -Z, and a plane rotated to face that way still
+   * reads its lettering left-to-right, because the viewer's right-hand
+   * direction flips with it.
+   */
+  facePlate(w, h, x, y, z, uv) {
+    const g = new THREE.PlaneGeometry(w, h);
+    const a = g.attributes.uv;
+    for (let i = 0; i < a.count; i++) {
+      a.setXY(i,
+        uv.u0 + a.getX(i) * (uv.u1 - uv.u0),
+        uv.v0 + a.getY(i) * (uv.v1 - uv.v0));
+    }
+    a.needsUpdate = true;
+    g.rotateY(Math.PI);
+    g.translate(x, y, z);
+    return this.push(g, 0xffffff);
+  }
+
   /** A four-sided pyramid, base at local y, aligned to the local axes. */
   pyramid(halfWidth, h, x, y, z, color) {
     const g = new THREE.ConeGeometry(halfWidth * Math.SQRT2, h, 4);
@@ -214,7 +260,7 @@ export class PartBuilder {
    *   are the shading the whole merged group shares, which is why glass and
    *   opaque geometry go into two different builders rather than one.
    */
-  finish(scene, { name = 'town', roughness = 0.9, metalness = 0, transparent = false, opacity = 1, castShadow = true, receiveShadow = true } = {}) {
+  finish(scene, { name = 'town', roughness = 0.9, metalness = 0, transparent = false, opacity = 1, castShadow = true, receiveShadow = true, map = null } = {}) {
     if (this.parts.length === 0) return null;
     const merged = mergeGeometries(this.parts, false);
     for (const p of this.parts) p.dispose();
@@ -225,8 +271,9 @@ export class PartBuilder {
     }
     merged.computeBoundingSphere();
     const material = new THREE.MeshStandardMaterial({
-      color: 0xffffff, // white, so the vertex colours come through unchanged
-      vertexColors: true,
+      color: 0xffffff, // white, so the vertex colours (or the map) come through unchanged
+      vertexColors: !this.textured,
+      map: map ?? null,
       roughness,
       metalness,
       transparent,

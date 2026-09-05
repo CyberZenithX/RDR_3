@@ -207,7 +207,7 @@ async function init() {
     ui.updateDamageFlash(player.damageFlash);
     ui.setDead(player.dead);
     ui.updateScreenFade(town.fade);
-    ui.setPlaceName(town.placeName);
+    ui.setPlaceName(town.label);
     // While mounted, ignore the horse's own collider in the camera's
     // occlusion sweep — the rider's pivot sits right on/inside it, which
     // otherwise collapses the camera to CAMERA.minDistance every frame.

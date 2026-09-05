@@ -659,6 +659,33 @@ contrast rather than size. Every one of the three failures above was found by
 taking a screenshot from the distance the feature is *for* — not from where it
 was convenient to stand.
 
+## Every shop sign was a blank coloured board
+
+**Symptom.** The human, looking at the finished street: "it is hard to even
+identify what each building is supposed to be." Correct — each building's sign
+was a rectangle of flat colour, so the only thing telling a gunsmith from a bank
+was the hue of a plank.
+
+**Cause.** Not a bug so much as a gap I designed in and did not notice. The town
+is one merged, vertex-coloured mesh (ADR-033) precisely to keep draw calls down,
+and a merged vertex-coloured mesh cannot carry text: the material has no `map`
+and the geometry has no UVs. The path of least resistance was a coloured board,
+and it looked fine in every screenshot I took, because I already knew which
+building was which.
+
+**Fix.** One canvas atlas — a horizontal strip per building, board colour baked
+in behind the lettering — and a `textured` mode on `PartBuilder` that keeps `uv`
+and drops `color`. The signs get their own merge and their own material. 55 draw
+calls became 56.
+
+**Lesson.** *You cannot see your own labels.* Every check I wrote passed and
+every screenshot I judged looked right, because I was reading the config, not the
+screen. The check that now guards it reads pixels back out of the atlas and fails
+a cell that is one flat tone — "the texture exists" is not "the texture says
+anything", which is round 3's audio lesson in a different medium.
+
+---
+
 ## The saloon's door was blocked by its own street furniture
 
 **Symptom.** A new smoke check walked sixty 10cm steps straight at the saloon

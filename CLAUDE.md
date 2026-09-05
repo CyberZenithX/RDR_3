@@ -70,7 +70,8 @@ One line per file. Long form in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `src/config-horse.js` | Every horse tunable: `HORSE`, `HORSE_ANIM`, `RIDING_POSE`, `TACK`, `PLACEHOLDER_HORSE`, clip candidates — **plus** the mounted/airborne accuracy penalties and the aiming steer rates. |
 | `src/config-combat.js` | Every gun tunable: `GUN`, `COMBAT`, `AIM_POSE`, `VFX`, `TARGETS`, `AUDIO`. |
 | `src/config-ai.js` | Every bandit tunable: `BANDIT`, `CAMPS`, `CAMP_PROPS` — **plus `HEALTH`**, the whole game's lethality model (ADR-027). |
-| `src/config-town.js` | **New.** Every round-5 tunable: `STREET`, `TOWN_BUILD`, `TOWN_COLORS`, `BUILDINGS` (the hand-placed coordinate list), `SALOON`, `HITCH`, `LAMPS`, `TOWNSFOLK`, `DOOR`. `TOWN` — the plateau — stays in `config.js`. |
+| `src/config-town.js` | **New.** The town's built fabric: `STREET`, `TOWN_BUILD`, `TOWN_COLORS`, `SIGNS`, `BUILDINGS` (the hand-placed coordinate list), `SALOON`, `HITCH`, `LAMPS`, `DOOR`. `TOWN` — the plateau — stays in `config.js`. |
+| `src/config-townsfolk.js` | **New.** `TOWNSFOLK`. Split out under the line cap on `config-ai.js`'s seam: the citizens are their own system. |
 | `src/noise.js` | Seeded PRNG + simplex + fbm + smoothstep. No internal deps. |
 | `src/terrain.js` | `heightAt` / `normalAt` / `buildTerrain` / `groundHeightAt` — plus **floor plates** (`addFloorPlate`), which is what finally makes `groundHeightAt` differ from `heightAt` (ADR-031). |
 | `src/sky.js` | Sky dome shader, sun + hemisphere light, fog, shadow follow. |
@@ -99,7 +100,8 @@ One line per file. Long form in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `src/ik.js` | **New.** `aimBoneAt` and `solveTwoBoneIK`. Aims bones by *direction* rather than by local angle, which is what makes it usable on this baked-IK skeleton at all. |
 | `src/bandit-gun.js` | **New.** One bandit's firing path, split out of bandit.js when the aim lead pushed it past the 400-line cap. Still deliberately not combat.js (ADR-028). |
 | `src/town.js` | **New.** The town orchestrator — owns no geometry, wires the builders together, and owns the saloon's door trigger (`inside`/`placeName`/`fade`) and the hitching post (`town.hitch`). |
-| `src/town-geo.js` | **New.** `PartBuilder`: vertex-coloured box/cylinder/prism/pyramid pushers, a per-building local frame, and one `finish()` that merges the whole town into **one mesh** (ADR-033). Add a *part*, never a mesh. |
+| `src/town-geo.js` | **New.** `PartBuilder`: vertex-coloured box/cylinder/prism/pyramid pushers, a per-building local frame, and one `finish()` that merges the whole town into **one mesh** (ADR-033). A second, `textured` mode keeps UVs for the signs. Add a *part*, never a mesh. |
+| `src/signs.js` | **New.** Every shop's lettering, drawn into ONE canvas atlas — one strip per building — so the whole town's signage is one draw call. No font is fetchable, so it is a canvas 2D serif, tracked by hand and shrunk to fit its board. |
 | `src/buildings.js` | **New.** One building from a `BUILDINGS` spec: shell, roof, false front, porch, windows, sign, steeple, boardwalk — plus its box colliders, its floor plates, and the saloon's interior. |
 | `src/town-props.js` | **New.** Hitching rail, trough, boardwalk crates, and `StreetLamps` (instanced glow + three `PointLight`s, `setLit()` for round 7). |
 | `src/townsfolk.js` | **New.** The citizens as a group: bandits.js's shape (one load, cloned rigs, `activeRadius`, foot-to-head ray cylinder, `hearShot`) with three deliberate differences — `player.glb`, per-body cloned+tinted materials, unarmed but shootable (ADR-034). |
@@ -235,9 +237,13 @@ Read [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-027 through ADR-030.
 Read [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-031 through ADR-034.
 
 - **Everything static in town is ONE merged, vertex-coloured mesh** (plus one
-  for the glass). Add a **part** through `town-geo.js`'s `PartBuilder`, never a
-  new mesh — that single merge is why a whole street costs about four draw
-  calls, and three smoke checks watch the number.
+  for the glass and one for the signs). Add a **part** through `town-geo.js`'s
+  `PartBuilder`, never a new mesh — that single merge is why a whole street
+  costs about five draw calls, and three smoke checks watch the number.
+- **A sign's lettering is a strip of one canvas atlas** (`signs.js`), and the
+  builder that carries it is `textured: true` — it keeps UVs and has no vertex
+  colour, so it cannot share the opaque merge. Adding a second textured surface
+  should join that atlas, not start a third mesh.
 - **A building is authored in its own frame** — local X across the frontage,
   local Z into the depth, front wall at local -Z, origin on the floor. `side`
   in `BUILDINGS` resolves to a centre and a facing; that is what makes the

@@ -16,7 +16,7 @@
 
 import * as THREE from 'three';
 import { ANIM } from './config.js';
-import { TOWNSFOLK } from './config-town.js';
+import { TOWNSFOLK } from './config-townsfolk.js';
 import { HEALTH } from './config-ai.js';
 import { addCircleCollider, removeCollider, resolveCollisions } from './collision.js';
 import { Health } from './health.js';
