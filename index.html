@@ -169,6 +169,43 @@
     text-shadow: 0 0 24px rgba(232, 112, 63, .9), 0 2px 8px #000;
   }
   #duelText.result { font-size: 30px; color: #f2c869; }
+
+  /* Round 7 — the main / pause menu, the settings panel, and the corner minimap. */
+  #menu { z-index: 20; background: radial-gradient(ellipse at center, rgba(18, 12, 8, 0.72) 0%, rgba(10, 7, 4, 0.95) 100%); }
+  #menu .panel {
+    pointer-events: auto; display: flex; flex-direction: column;
+    align-items: stretch; gap: 10px; min-width: 300px;
+  }
+  /* An explicit `display` on .panel / buttons would otherwise beat the UA
+     `[hidden]{display:none}` rule — menu.js toggles the `hidden` attribute. */
+  #menu [hidden] { display: none !important; }
+  #menu h2 {
+    margin: 0 0 .2em; font-size: 18px; letter-spacing: .16em;
+    color: #d9a441; text-transform: uppercase;
+  }
+  #menu button[data-act] {
+    font: 600 14px/1 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    letter-spacing: .1em; text-transform: uppercase; color: #e8d9b8;
+    background: rgba(60, 42, 26, 0.55); border: 1px solid rgba(217, 164, 65, 0.45);
+    padding: 11px 18px; cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  #menu button[data-act]:hover { background: rgba(90, 63, 38, 0.85); border-color: #d9a441; }
+  #menuSettings label {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    font: 500 12.5px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; color: #d8c9a8;
+  }
+  #menuSettings input[type="range"] { width: 150px; }
+  #menuSettings select {
+    font: inherit; background: #2a1f16; color: #e8d9b8;
+    border: 1px solid rgba(217, 164, 65, 0.4); padding: 3px 6px;
+  }
+  #menuSettings button[data-act] { margin-top: 6px; align-self: center; padding-inline: 32px; }
+
+  #minimap {
+    position: fixed; left: 3vw; top: 3vh; width: 150px; height: 150px;
+    border-radius: 50%; pointer-events: none; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  }
 </style>
 </head>
 <body>
@@ -204,6 +241,44 @@
 <div id="wanted"></div>
 <div id="bountyText"></div>
 <div id="duelText"></div>
+<canvas id="minimap"></canvas>
+
+<div id="menu" class="overlay hidden" data-noplay>
+  <div id="menuMain" class="panel">
+    <h1>DUST &amp; IRON</h1>
+    <button data-act="resume">Resume</button>
+    <button data-act="new">New Game</button>
+    <button data-act="continue">Continue</button>
+    <button data-act="save">Save Checkpoint</button>
+    <button data-act="settings">Settings</button>
+    <button data-act="quit">Main Menu</button>
+    <p class="hint" id="menuHint">WASD move &middot; Shift sprint &middot; Space jump &middot; H whistle &middot; E mount &middot; right mouse aim &middot; R reload &middot; B bounty &middot; F duel &middot; M mute &middot; Esc pause</p>
+  </div>
+  <div id="menuSettings" class="panel" hidden>
+    <h2>Settings</h2>
+    <label>Mouse sensitivity <input type="range" id="setSens" min="0.25" max="3" step="0.05"></label>
+    <label>Invert look Y <input type="checkbox" id="setInvertY"></label>
+    <label>Shadow quality
+      <select id="setShadow">
+        <option value="off">Off</option>
+        <option value="low">Low</option>
+        <option value="medium">Medium</option>
+        <option value="high">High</option>
+      </select>
+    </label>
+    <label>Draw distance
+      <select id="setDraw">
+        <option value="near">Near</option>
+        <option value="medium">Medium</option>
+        <option value="far">Far</option>
+      </select>
+    </label>
+    <label>Master volume <input type="range" id="setVol" min="0" max="1" step="0.05"></label>
+    <label>Mute all sound (M) <input type="checkbox" id="setMute"></label>
+    <button data-act="back">Back</button>
+  </div>
+</div>
+
 <div id="screenFade"></div>
 
 <script type="importmap">

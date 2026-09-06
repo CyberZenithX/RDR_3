@@ -82,6 +82,15 @@ sRGB output, `PCFSoftShadowMap`), the async load sequence, and owns the
    `setAiming(...)` / `updateAmmo(...)` / `updateHealth(...)` /
    `updateDamageFlash(...)` / `setDead(...)` — called unconditionally every
    frame off live state; all idempotent, no edge detection.
+12. `shell.afterFrame(raw)` — the round-7 ambiences, the minimap, and the
+    checkpoint auto-saves — then `renderer.render()`, then `shell.writeDebug()`.
+
+Round 7 wraps the whole loop from the outside (ADR-041). Right after `raw` is
+computed: **`shell.isPaused()`** — true only while the *pause* menu is open (not
+the boot main menu) — and if so the frame is `renderer.render()` + `__frames++`
++ `return`, nothing simulated, no reorder. Then **`shell.beforeFrame(raw)`**:
+the `M` mute edge, and `dayNight.update(raw)` on the **unscaled** delta (a
+duel's slow-mo must not stop the day), before step 0's `handleLook()`.
 
 There is one more line before step 1: **a dead rider does not stay in the
 saddle**, so `main.js` calls `horse.handleMountToggle(player)` when
@@ -152,7 +161,18 @@ and the bandits use `groundHeightAt` too, same as the player.
 sun-disc), sun `DirectionalLight` + `HemisphereLight`, `FogExp2`.
 `updateShadowFollow` keeps the shadow camera centered on the player every
 frame — **not** the horse when mounted, and that needs no change, because the
-player's position tracks the saddle every frame anyway.
+player's position tracks the saddle every frame anyway. The dome's
+`sunDirection` uniform is a **clone** of the returned `sunDirection` vector:
+round 7's `daynight.js` moves the light's copy (clamped above the horizon) and
+the disc's copy (the true sun, down past it) independently.
+
+`src/daynight.js` — **round 7.** `DayNight`: one clock `t`, the sun-arc
+(elevation + azimuth from `t`), and the atmosphere lerped between
+`DAYNIGHT.{night, golden, day}` — all keyed to elevation, not `t` (ADR-040), so
+the arc and the look tune independently. Writes the sun/hemi lights, the sky
+uniforms, `scene.fog`, `scene.background`, `renderer.toneMappingExposure`, and
+`StreetLamps.setLit()` (with hysteresis). Exposes `nightFactor` / `isNight` /
+`elevation` / `setT()`. `main.js` ticks it on the **unscaled** delta.
 
 `src/props.js` — rocks (lumpy `IcosahedronGeometry`), cacti and dead trees
 (merged `CylinderGeometry` parts via `BufferGeometryUtils.mergeGeometries`),
@@ -171,11 +191,15 @@ root→tip) as one fixed-size `InstancedMesh` pool that **follows the player**,
 re-bucketed onto a world-space jittered grid (deterministic per cell via
 hashing, so it doesn't visibly reshuffle) whenever the player moves
 `GRASS.recenterDistance`. `GRASS.playerKeepOut` (1.4) stops it spawning on top
-of the character. Does not follow the horse.
+of the character. Does not follow the horse. Round 7's `installWind()` splices
+a height-weighted, world-XZ-phased sway into the tuft material via
+`onBeforeCompile` (`WIND.*` baked in as literals, one `uWindTime` uniform);
+`updateGrassWind(state, time)` advances it. Street keep-out is untouched.
 
 `src/world.js` — orchestrator only. Calls the terrain/sky/props/grass
-builders, wires `update(playerPos)` (shadow follow + grass recenter), exposes
-`groundHeightAt`. ~35 lines on purpose.
+builders, wires `update(playerPos, dt)` (shadow follow + grass recenter + the
+grass-wind clock), exposes `groundHeightAt` and passes through `sun` / `hemi` /
+`skyDome` / `sunDirection` for `daynight.js`. ~43 lines.
 
 `src/collision.js` — the one collider array (`colliders`),
 `addCircleCollider` / `addBoxCollider` / `removeCollider`, and
@@ -389,12 +413,20 @@ whether the screen is empty or full. The flash is *parented to the muzzle*,
 not positioned at it each frame.
 
 `src/audio.js` — `GameAudio` / `createAudio(camera, scene)`. `THREE.AudioListener`
-on the camera, round-robined `PositionalAudio` voices per sound.
+on the camera, round-robined `PositionalAudio` voices per one-shot.
 **Never throws and never rejects**: a missing file is one warning and silence,
 so `play()` on a game with an empty `audio/` is a no-op. `resume()` is wired to
 the pointer-lock click, which is the user gesture browsers require before an
-AudioContext may start. Round 7's looping ambience wants a `loop()` alongside
-`play()`, not a reshape of it.
+AudioContext may start. Round 7 added **`loop()`** (ADR-042): one persistent
+`THREE.Audio` / `PositionalAudio` per bed with a live `setGain()`, an inert
+handle when the file is missing, its misses in `missingLoops` (not `missing`).
+`setMasterVolume()` and `setEnabled()` (the settings slider and the `M` mute)
+reapply to every voice and loop.
+
+`src/ambience.js` — **round 7.** `Ambience`: `wind` (flat), `crickets` (gain
+from `nightFactor`), `piano` (positional at `AUDIO.pianoPosition`), `hoofbeats`
+(gain + playback rate from the ridden horse's speed). One `audio.loop()` handle
+each; `update(dt, {nightFactor, mounted, speed})`.
 
 ### Bandits
 
@@ -499,10 +531,35 @@ DOM numbering: 0 fire, 2 aim), pointer lock (`initInput(canvas)`), raw
 still clears; losing pointer lock clears every held button, so Esc mid-burst
 does not resume firing. `contextmenu` is prevented while locked — right mouse
 is the aim button.
-The pointer-lock click listener is bound to `document`, not the canvas —
-**if a future round adds overlay UI that should be clickable without starting
-play, that listener needs an `e.target` guard**; it currently assumes any
-click anywhere means "start playing."
+The pointer-lock click listener is bound to `document`, not the canvas, and
+skips any click inside `[data-noplay]` (round 7's `#menu` carries it) — the
+`e.target` guard this note used to ask for. A new clickable overlay needs the
+same attribute.
+
+`src/shell.js` — **round 7** (ADR-041). `createShell({renderer, scene, world,
+audio, player, horse, tpCamera, bandits, bounties, deputies, town})` →
+`{menu, dayNight, minimap, isPaused(), beforeFrame(raw), afterFrame(raw),
+onPointerLock(locked), showMain(), writeDebug(d)}`. Owns `applySettings` (mouse
+sensitivity → `INPUT.mouseSensitivity`; shadow quality → `sun.shadow.mapSize` +
+a material recompile when toggling `renderer.shadowMap.enabled`; draw distance →
+`dayNight.fogScale`; master volume + mute → `audio`) and the checkpoint
+read/write (auto-save on entering the saloon and on a bounty paying out).
+
+`src/menu.js` — **round 7.** `initMenu(callbacks)` → `{settings, isOpen(),
+isPaused(), showMain(), showPause(), hide(), refresh(), _apply}`. Boot = main
+mode; Esc mid-game = pause mode (`isPaused()` → `main.js` freezes the frame).
+Settings persist to `localStorage[MENU.storageKey]` and apply live via the
+`applySettings` callback (also once at construction, for persisted prefs).
+
+`src/checkpoint.js` — **round 7.** `saveCheckpoint` / `loadCheckpoint` /
+`clearCheckpoint` / `hasCheckpoint`. One localStorage record `{x, z, yaw,
+money, health}` — `y` recomputed from the terrain on load. Every call
+try/caught. `player.respawn()` reads it before the spawn/camp fallback.
+
+`src/minimap.js` — **round 7.** `Minimap` — a `<canvas id="minimap">` redrawn
+each frame, north-up, `MINIMAP.range` metres to the edge: town footprint,
+living bandit camps, an accepted bounty ring, active deputies, the horse, and
+the player wedge (rotated by `-meshYaw`). Inert if the element is absent.
 
 `src/ui.js` — `initUI()`: toggles the loading screen, click-to-play overlay,
 boundary-warning opacity, stamina bar visibility (`setMounted(bool)`) and
@@ -514,11 +571,20 @@ reloading)`, guarded so it only touches the DOM when the numbers change). All
 markup lives in `index.html` — the one exception is the ammo pips, built from
 `COMBAT.magazine` so a bigger cylinder stays one number in one file.
 
-`src/config.js` — every tunable **except the horse's own**, grouped by system:
-`RENDER`, `COLORS`, `SKY`, `SUN`, `FOG`, `WORLD`, `TERRAIN`, `TOWN`,
-`BOUNDARY`, `MESAS`, `SPAWN`, `PLAYER`, `ANIM`, `CLIP_REFERENCE_SPEED`,
-`CLIP_CANDIDATES`, `JUMP`, `PLACEHOLDER`, `CAMERA`, `INPUT`, `PROPS`, `GRASS`,
-`UI`. `JUMP` is placeholder-only fallback pose constants.
+`src/config.js` — every tunable **except** those split into the seven other
+config files, grouped by system: `RENDER`, `COLORS`, `SKY`, `SUN`, `FOG`,
+`WORLD`, `TERRAIN`, `TOWN`, `BOUNDARY`, `MESAS`, `SPAWN`, `PLAYER`, `ANIM`,
+`CLIP_REFERENCE_SPEED`, `CLIP_CANDIDATES`, `JUMP`, `PLACEHOLDER`, `CAMERA`,
+`INPUT`, `PROPS`, `GRASS`, `UI`. `JUMP` is placeholder-only fallback pose
+constants. `SKY`/`SUN`/`FOG`/`COLORS` here are the round 0–6 static values —
+round 7's `DAYNIGHT.day` palette matches them so midday is unchanged.
+
+`src/config-polish.js` — **round 7**, the eighth config file (ADR-039):
+`DAYNIGHT` (the three elevation-keyed sun-arc palettes + arc params),
+`WIND` (grass sway), `MENU` (settings defaults, `shadowSizes`,
+`drawDistanceFog`), `MINIMAP`. Round 7's audio numbers are NOT here — they are
+in `config-combat.js`'s `AUDIO` (`loopFiles`, `loopVolumes`, the piano's
+position and falloff, the fade rate).
 
 `src/config-town.js` — the town's built fabric: `STREET`, `TOWN_BUILD`,
 `TOWN_COLORS`, `SIGNS`, `BUILDINGS` (the hand-placed coordinate list),
@@ -764,13 +830,21 @@ townCounts   insideSaloon   screenFade
 townsfolkAlive   townsfolkStates   horseHitchMode
 money  bountyStates  bountyMarkerVisible
 wantedStars  deputiesActive  duelPhase  duelTimeScale
+timeOfDay  sunElevation  nightFactor  lampsLit        (round 7, via shell.writeDebug)
 targets  combat  bandits  town  bounties  duel  deputies  renderer  (live refs)
+audio  dayNight  menu  minimap                        (round 7 live refs)
 ```
 
 `renderer` is there so `renderer.info.render.calls` — BUILD-PLAN.md's ~120
-draw-call budget — can be read without wiring it up again. Round 7 owns the
-real performance pass; this is a floor that catches a round quietly adding
-fifty.
+draw-call budget — can be read without wiring it up again. Round 7's
+performance pass measured **63 draw calls at night with the lamps lit**, 61
+down the main street, 59 at a camp; ~265k triangles. The floor smoke checks
+still sample at spawn, at a camp, down the street, and now at night.
+
+`window.__debug.menu` (from `shell.js`) exposes `isPaused()` / `showPause()` /
+`showMain()` / `hide()` / `_apply(settings)` — the smoke harness never takes
+pointer lock, so it drives the menu directly. `window.__debug.dayNight.setT(t)`
+jumps the clock for the same reason.
 
 `window.__frames` / `window.__ready` are kept alive every frame for the smoke
 harness. `window.__debug.horse` is the live `Horse`; its public
@@ -784,11 +858,14 @@ existed only while there was a retargeted player jump clip.
 
 ## Known open gaps at this layer
 
-- **No wind sway on grass** — round 7 owns the shader; grass is static
-  geometry, instanced and player-following.
-- **Audio is three one-shots only.** `gunshot.ogg` / `reload.ogg` /
-  `hit.ogg` are in and wired (all CC0 — provenance in [ASSETS.md](ASSETS.md)).
-  Round 7 owns the looping ambience and the master mute.
+- **Grass wind is a shader injection** (`grass.js` `installWind`), height-
+  weighted and world-XZ-phased. No CPU pass; `STREET.grassKeepOut` is untouched
+  because placement already excludes the street. Amplitude is unwatched.
+- **Audio: three one-shots + four looping beds**, all CC0
+  ([ASSETS.md](ASSETS.md)). The loops go through `audio.loop()` (ADR-042), an
+  inert handle when absent; master mute (`M`, and the settings checkbox) is
+  `setEnabled()`. The four `.ogg` loops were fetched and encoded this round —
+  the seamless-loop crossfade may leave a faint seam a play session would catch.
 - **Camera `lookAt` is recomputed instantly from a damped position**, not
   itself damped — could look slightly swimmy for a frame or two right after a
   big obstruction-triggered zoom-in. Not visually confirmed; minor.

@@ -12,6 +12,49 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { heightAt, normalAt } from './terrain.js';
 import { GRASS, TOWN, WORLD, COLORS } from './config.js';
 import { STREET } from './config-town.js';
+import { WIND } from './config-polish.js';
+
+/**
+ * Round 7's wind: a per-vertex sway injected into the tuft material. The offset
+ * scales with height up the blade (root planted, tip travelling) and is phased
+ * by the tuft's own world XZ so a field ripples instead of pulsing as one. The
+ * numbers are baked in as literals — there is no runtime need to retune them
+ * and no uniform churn for it; only the clock (`uWindTime`) is a uniform.
+ * `STREET.grassKeepOut` needs no handling here: recenterGrass already never
+ * PLACES a tuft on the street, so the wind has nothing there to move.
+ */
+function installWind(mat) {
+  const n = (v) => v.toFixed(4);
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uWindTime = { value: 0 };
+    shader.vertexShader = 'uniform float uWindTime;\n' + shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+      {
+        #ifdef USE_INSTANCING
+          vec3 wGrassPos = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        #else
+          vec3 wGrassPos = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        #endif
+        float wGrassH = clamp(transformed.y / ${n(GRASS.bladeHeight)}, 0.0, 1.0);
+        float wGrassBend = wGrassH * wGrassH;
+        float wGrassPhase = wGrassPos.x * ${n(WIND.frequency)} + wGrassPos.z * ${n(WIND.frequency * 0.7)};
+        float wGrassSway = sin(uWindTime * ${n(WIND.speed)} + wGrassPhase)
+          + ${n(WIND.gustAmplitude / WIND.amplitude)} * sin(uWindTime * ${n(WIND.gustSpeed)} + wGrassPhase * 0.5);
+        transformed.x += wGrassSway * ${n(WIND.amplitude)} * wGrassBend;
+        transformed.z += wGrassSway * ${n(WIND.amplitude * 0.45)} * wGrassBend;
+      }`,
+    );
+    mat.userData.windShader = shader;
+  };
+  mat.userData.windApplied = true;
+}
+
+/** Advances the grass sway clock. Called from world.update() every frame with the running time. */
+export function updateGrassWind(state, time) {
+  const sh = state.mesh?.material?.userData?.windShader;
+  if (sh) sh.uniforms.uWindTime.value = time;
+}
 
 const GRASS_SEED = WORLD.seed + 707;
 
@@ -74,6 +117,7 @@ export function buildGrass(scene) {
     emissive: new THREE.Color(COLORS.grassRoot),
     emissiveIntensity: GRASS.ambientFloor,
   });
+  installWind(mat);
   const mesh = new THREE.InstancedMesh(geo, mat, GRASS.count);
   mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   mesh.frustumCulled = false; // instances span a moving radius around the player; cull per-frame cost isn't worth it here

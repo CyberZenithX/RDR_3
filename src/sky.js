@@ -73,7 +73,11 @@ export function buildSky(scene) {
       horizonColor: { value: new THREE.Color(COLORS.skyHorizon) },
       lowHazeColor: { value: new THREE.Color(COLORS.skyLowHaze) },
       sunColor: { value: new THREE.Color(COLORS.sunDisc) },
-      sunDirection: { value: sunDir },
+      // A clone, not sunDir itself: daynight.js mutates the returned sunDirection
+      // in place every frame for the shadow-casting light (whose dir.y it clamps
+      // above the horizon), while the dome's disc must follow the TRUE sun down
+      // past it. Two needs, two vectors.
+      sunDirection: { value: sunDir.clone() },
       horizonPower: { value: SKY.horizonPower },
       lowHazePower: { value: SKY.lowHazePower },
       sunDiscPower: { value: SKY.sunDiscPower },

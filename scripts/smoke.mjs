@@ -3082,17 +3082,22 @@ const CHECKS = [
     return null;
   }],
 
-  ['street lamps are lit, and can be turned off for round 7', async () => {
+  ['street lamps can be turned off and relit (round 7 drives this from the sun)', async () => {
     const info = await page.evaluate(async () => {
       const { LAMPS } = await import('/src/config-town.js');
       const { colliders } = await import('/src/collision.js');
       const lamps = window.__debug.town.lamps;
+      // Round 7: the day/night cycle has already called setLit() by now (it is
+      // daylight at boot, so the lamps are OFF). Establish the lit baseline
+      // explicitly, run the off/on cycle, then hand the state back to the cycle.
+      lamps.setLit(true);
       const before = lamps.lights.map((l) => l.intensity);
       lamps.setLit(false);
       const off = { intensity: lamps.lights.map((l) => l.intensity), glows: lamps.glows.visible };
       lamps.setLit(true);
       const on = lamps.lights.map((l) => l.intensity);
       const lampCols = colliders.filter((c) => c.meta?.kind === 'lamp');
+      lamps.setLit(window.__debug.dayNight?.isNight ?? false); // restore to what the sun wants
       return {
         glowCount: lamps.glows.count,
         posts: LAMPS.posts.length,
@@ -3105,7 +3110,7 @@ const CHECKS = [
     });
     if (info.glowCount !== info.posts) return `${info.glowCount} glow instances for ${info.posts} lamp posts`;
     if (info.lights !== info.points) return `${info.lights} point lights for ${info.points} configured`;
-    if (!info.before.every((v) => v > 0)) return 'the interior/porch lights are dark at boot';
+    if (!info.before.every((v) => v > 0)) return 'setLit(true) did not light the interior/porch lights';
     if (!info.off.intensity.every((v) => v === 0)) return `setLit(false) left ${JSON.stringify(info.off.intensity)}`;
     if (info.off.glows) return 'setLit(false) left the glow geometry visible';
     if (!info.on.every((v) => v > 0)) return 'setLit(true) did not bring the lights back';
@@ -3445,6 +3450,260 @@ const CHECKS = [
     if (!(info.during.moved > 1)) return `the camera barely moved for the face-off (${info.during.moved.toFixed(2)}m) — the framing did not compose in`;
     if (!(info.after.weight < 0.1)) return `the duel camera did not hand back (weight still ${info.after.weight.toFixed(2)})`;
     return null;
+  }],
+
+  // Round 7 — polish ------------------------------------------------------
+  ['the sun arc drives the sky, the fog and the town lamps', async () => {
+    // Force high noon and deep midnight through the DayNight test hook (setT)
+    // and read what followed. The lamps' setLit() was wired in round 5 and
+    // left uncalled; this is the first thing that calls it.
+    const info = await page.evaluate(() => {
+      const dn = window.__debug.dayNight;
+      const scene = window.__debug.scene;
+      const lamps = window.__debug.town?.lamps ?? null;
+      const dome = scene.getObjectByName('skyDome');
+      const saved = dn.t;
+      const sample = () => ({
+        elev: dn.elevation,
+        sunIntensity: dn.sun.intensity,
+        fog: scene.fog.density,
+        night: dn.nightFactor,
+        lit: lamps ? lamps.lit : null,
+        lightY: dn.lightDir.y,
+        disc: dome.material.uniforms.sunDiscStrength.value,
+        trueY: dome.material.uniforms.sunDirection.value.y,
+      });
+      dn.setT(0.5); const noon = sample();
+      dn.setT(0.0); const midnight = sample();
+      dn.setT(saved);
+      return { noon, midnight };
+    });
+    const { noon, midnight } = info;
+    if (!(noon.elev > 0.8)) return `t=0.5 gave sun elevation ${noon.elev.toFixed(2)}, expected near +1 (noon)`;
+    if (!(midnight.elev < -0.8)) return `t=0 gave sun elevation ${midnight.elev.toFixed(2)}, expected near -1 (midnight)`;
+    if (!(midnight.sunIntensity < noon.sunIntensity * 0.35)) {
+      return `the sun barely dimmed at night (${midnight.sunIntensity.toFixed(2)} vs ${noon.sunIntensity.toFixed(2)})`;
+    }
+    if (!(midnight.fog > noon.fog)) return `night fog (${midnight.fog}) is not thicker than day fog (${noon.fog})`;
+    if (!(midnight.night > 0.8 && noon.night < 0.15)) {
+      return `nightFactor did not swing (noon ${noon.night.toFixed(2)}, midnight ${midnight.night.toFixed(2)})`;
+    }
+    if (noon.lit !== null && (noon.lit !== false || midnight.lit !== true)) {
+      return `lamps did not follow the sun (day lit=${noon.lit}, night lit=${midnight.lit})`;
+    }
+    if (!(midnight.disc <= 0.02)) return `the sun disc is still ${midnight.disc} at midnight — it should be gone`;
+    if (!(midnight.trueY < 0)) return `the sky's sun direction stayed above the horizon at midnight (y=${midnight.trueY.toFixed(2)})`;
+    if (!(midnight.lightY >= 0.15 - 1e-6)) {
+      return `the shadow light dipped to y=${midnight.lightY.toFixed(2)} at night — a raking shadow camera breaks`;
+    }
+    console.log(`  (info) noon sun ${noon.sunIntensity.toFixed(2)} / midnight ${midnight.sunIntensity.toFixed(2)}; fog ${noon.fog.toFixed(5)} -> ${midnight.fog.toFixed(5)}`);
+    return null;
+  }],
+
+  ['the wind sway is compiled into the grass material', async () => {
+    const info = await page.evaluate(() => {
+      const gs = window.__debug.player.world.grassState;
+      const mat = gs.mesh.material;
+      const sh = mat.userData.windShader;
+      return {
+        applied: !!mat.userData.windApplied,
+        compiled: !!sh,
+        hasUniform: !!sh && typeof sh.uniforms?.uWindTime?.value === 'number',
+        hasSway: !!sh && /wGrassSway/.test(sh.vertexShader) && /uWindTime/.test(sh.vertexShader),
+        clockRunning: !!sh && sh.uniforms.uWindTime.value > 0,
+      };
+    });
+    if (!info.applied) return 'grass material has no windApplied flag — installWind() did not run';
+    if (!info.compiled) return 'the grass shader never compiled the wind injection (onBeforeCompile did not fire)';
+    if (!info.hasSway) return 'the compiled grass vertex shader is missing the wGrassSway / uWindTime injection';
+    if (!info.hasUniform) return 'the grass shader has no uWindTime uniform';
+    if (!info.clockRunning) return 'uWindTime is not being advanced by world.update()';
+    return null;
+  }],
+
+  ['the four looping ambiences are wired, present and sane', async () => {
+    const info = await page.evaluate(async () => {
+      const { AUDIO } = await import('/src/config-combat.js');
+      const audio = window.__debug.audio;
+      const names = Object.keys(AUDIO.loopFiles ?? {});
+      const out = {
+        names: names.slice().sort(),
+        loopFn: typeof audio.loop === 'function',
+        handleCount: audio.loops.length,
+        missing: window.__debug.audioMissingLoops ?? [],
+        onsetLeak: names.filter((n) => n in (AUDIO.maxOnsets ?? {})),
+        roundThreeMissing: (window.__debug.audioMissing ?? []).length,
+        files: [],
+      };
+      // Content check for the ones that are present: a real loop bed, not a
+      // truncated blip or a clipped file (rule 1b — "loaded" is not "correct").
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      for (const [name, file] of Object.entries(AUDIO.loopFiles)) {
+        if (out.missing.includes(file)) continue;
+        try {
+          const buf = await ctx.decodeAudioData(await (await fetch('/audio/' + file)).arrayBuffer());
+          const d = buf.getChannelData(0);
+          let peak = 0;
+          for (let i = 0; i < d.length; i += 7) peak = Math.max(peak, Math.abs(d[i]));
+          out.files.push({ name, file, dur: +buf.duration.toFixed(2), ch: buf.numberOfChannels, peak: +peak.toFixed(3) });
+        } catch (e) {
+          out.files.push({ name, file, error: String(e).slice(0, 80) });
+        }
+      }
+      await ctx.close();
+      return out;
+    });
+    const want = ['crickets', 'hoofbeats', 'piano', 'wind'];
+    if (JSON.stringify(info.names) !== JSON.stringify(want)) {
+      return `AUDIO.loopFiles is ${JSON.stringify(info.names)}, must be exactly ${JSON.stringify(want)} (BUILD-PLAN.md names them)`;
+    }
+    if (!info.loopFn) return 'audio.loop() is not a function';
+    if (info.handleCount < 4) return `only ${info.handleCount} loop handles built, expected 4`;
+    if (info.onsetLeak.length) return `${info.onsetLeak.join(', ')} is in AUDIO.maxOnsets — a loop must not be onset-budgeted`;
+    if (info.roundThreeMissing !== 0) return `round-3 audio regressed: ${info.roundThreeMissing} one-shot(s) now missing`;
+    if (info.missing.length) return `ambience file(s) missing: ${info.missing.join(', ')} — fetch CC0 loops per docs/ASSETS.md`;
+    for (const f of info.files) {
+      if (f.error) return `${f.file} failed to decode: ${f.error}`;
+      if (f.ch !== 1) return `${f.file} is ${f.ch}-channel — PositionalAudio needs mono`;
+      if (f.dur < 2) return `${f.file} is only ${f.dur}s — too short for an ambient loop`;
+      if (f.peak >= 0.999) return `${f.file} peaks at full scale — it clips on decode`;
+      if (f.peak < 0.02) return `${f.file} peaks at ${f.peak} — effectively silent`;
+    }
+    console.log(`  (info) ambiences: ${info.files.map((f) => `${f.name} ${f.dur}s ${(20 * Math.log10(f.peak)).toFixed(1)}dB`).join(', ')}`);
+    return null;
+  }],
+
+  ['the master mute stops one-shots and restores', async () => {
+    const info = await page.evaluate(() => {
+      const audio = window.__debug.audio;
+      const start = audio.enabled;
+      audio.setEnabled(false);
+      const offReturn = audio.play('gunshot', { x: 0, y: 0, z: 0 });
+      const off = audio.enabled;
+      audio.setEnabled(true);
+      const on = audio.enabled;
+      audio.setEnabled(start);
+      return { off, on, offReturn };
+    });
+    if (info.off !== false) return 'audio.setEnabled(false) did not disable audio';
+    if (info.offReturn !== null) return 'a one-shot fired while muted';
+    if (info.on !== true) return 'audio.setEnabled(true) did not re-enable audio';
+    return null;
+  }],
+
+  ['settings resize the shadow map and scale the fog', async () => {
+    const info = await page.evaluate(async () => {
+      const { MENU } = await import('/src/config-polish.js');
+      const menu = window.__debug.menu;
+      const dn = window.__debug.dayNight;
+      const sun = dn.sun;
+      const base = { ...menu.settings };
+      menu._apply({ ...base, shadowQuality: 'low', drawDistance: 'near' });
+      const low = { mapW: sun.shadow.mapSize.width, fogScale: dn.fogScale };
+      menu._apply({ ...base, shadowQuality: 'high', drawDistance: 'far' });
+      const high = { mapW: sun.shadow.mapSize.width, fogScale: dn.fogScale };
+      menu._apply({ ...base, shadowQuality: 'off' });
+      const off = { enabled: window.__debug.renderer.shadowMap.enabled };
+      menu._apply(base); // restore
+      return { low, high, off, sizes: MENU.shadowSizes, fog: MENU.drawDistanceFog };
+    });
+    if (info.low.mapW !== info.sizes.low) return `'low' shadows gave a ${info.low.mapW}px map, expected ${info.sizes.low}`;
+    if (info.high.mapW !== info.sizes.high) return `'high' shadows gave a ${info.high.mapW}px map, expected ${info.sizes.high}`;
+    if (info.off.enabled !== false) return `'off' shadows left renderer.shadowMap.enabled = ${info.off.enabled}`;
+    if (info.low.fogScale !== info.fog.near) return `'near' draw distance set fogScale ${info.low.fogScale}, expected ${info.fog.near}`;
+    if (info.high.fogScale !== info.fog.far) return `'far' draw distance set fogScale ${info.high.fogScale}, expected ${info.fog.far}`;
+    if (!(info.low.fogScale > info.high.fogScale)) return 'near draw distance is not foggier than far';
+    return null;
+  }],
+
+  ['a checkpoint is written to localStorage and respawn reads it back', async () => {
+    const info = await page.evaluate(async () => {
+      const { saveCheckpoint, loadCheckpoint, clearCheckpoint } = await import('/src/checkpoint.js');
+      const p = window.__debug.player;
+      const home = { x: p.position.x, y: p.position.y, z: p.position.z, yaw: p.meshYaw };
+      clearCheckpoint();
+      const none = loadCheckpoint();
+      saveCheckpoint({ x: 123.5, z: -67.25, yaw: 1.2, money: 40, health: 3 });
+      const round = loadCheckpoint();
+      // Somewhere else entirely, then die back to the checkpoint.
+      p.position.set(-400, 60, 400);
+      p.dead = false;
+      p._lastCamp = { x: -330, z: 60 }; // a checkpoint must beat the camp fallback
+      p.respawn();
+      const after = { x: p.position.x, y: p.position.y, z: p.position.z, yaw: p.meshYaw };
+      clearCheckpoint();
+      p._lastCamp = null;
+      p.position.set(home.x, home.y, home.z);
+      p.meshYaw = home.yaw;
+      p.health.reset();
+      return { none, round, after };
+    });
+    if (info.none !== null) return 'clearCheckpoint() left something behind — loadCheckpoint did not return null';
+    if (!info.round || info.round.x !== 123.5 || info.round.z !== -67.25 || info.round.yaw !== 1.2 || info.round.money !== 40) {
+      return `the saved record round-tripped wrong: ${JSON.stringify(info.round)}`;
+    }
+    const off = Math.hypot(info.after.x - 123.5, info.after.z - (-67.25));
+    if (!(off < 0.5)) return `respawn landed ${off.toFixed(2)}m from the checkpoint, not at it (camp fallback won?)`;
+    if (!Number.isFinite(info.after.y)) return `respawn left player.y = ${info.after.y}`;
+    if (Math.abs(info.after.yaw - 1.2) > 1e-6) return `respawn did not take the checkpoint yaw (${info.after.yaw})`;
+    return null;
+  }],
+
+  ['the minimap canvas is live and sized', async () => {
+    // A throw inside minimap.update() would already have failed the run (it is
+    // called every frame); this just confirms the element and context exist.
+    const info = await page.evaluate(async () => {
+      const { MINIMAP } = await import('/src/config-polish.js');
+      const mm = window.__debug.minimap;
+      return {
+        inDom: !!document.getElementById('minimap'),
+        hasCtx: !!mm?.ctx,
+        w: mm?.canvas?.width,
+        expect: MINIMAP.size,
+      };
+    });
+    if (!info.inDom) return '#minimap is not in the DOM';
+    if (!info.hasCtx) return 'the minimap has no 2D context';
+    if (info.w !== info.expect) return `minimap canvas is ${info.w}px, expected ${info.expect}`;
+    return null;
+  }],
+
+  ['the pause menu freezes the sim and still advances frames', async () => {
+    const before = await page.evaluate(() => {
+      window.__debug.menu.showPause();
+      return { frames: window.__frames, t: window.__debug.dayNight.t, paused: window.__debug.menu.isPaused() };
+    });
+    await page.waitForTimeout(600);
+    const after = await page.evaluate(() => {
+      const r = { frames: window.__frames, t: window.__debug.dayNight.t };
+      window.__debug.menu.hide();
+      return r;
+    });
+    if (!before.paused) return 'menu.showPause() did not enter the paused state';
+    if (!(after.frames > before.frames)) return 'frames stopped advancing while paused — the smoke harness would stall';
+    if (Math.abs(after.t - before.t) > 1e-6) return `the day/night clock advanced ${(after.t - before.t).toExponential(1)} while paused — the world is not frozen`;
+    return null;
+  }],
+
+  ['draw calls stay within budget at night with the lamps lit', async () => {
+    // The round-7 "final performance pass" floor: the sun down, the lamps and
+    // their glow instances on, still under BUILD-PLAN.md's ~120.
+    const saved = await page.evaluate(() => {
+      const t = window.__debug.dayNight.t;
+      window.__debug.dayNight.setT(0.0);
+      return t;
+    });
+    await page.waitForTimeout(700); // a few headless frames at night
+    const info = await page.evaluate(() => ({
+      calls: window.__debug.renderer.info.render.calls,
+      tris: window.__debug.renderer.info.render.triangles,
+      lit: window.__debug.town?.lamps?.lit ?? null,
+      night: window.__debug.nightFactor,
+    }));
+    await page.evaluate((t) => window.__debug.dayNight.setT(t), saved);
+    if (info.lit === false) return 'the lamps did not light at midnight';
+    console.log(`  (info) night draw calls ${info.calls}, triangles ${info.tris.toLocaleString()}, nightFactor ${info.night.toFixed(2)}`);
+    return info.calls <= 120 ? null : `${info.calls} draw calls at night, budget is ~120`;
   }],
 ];
 

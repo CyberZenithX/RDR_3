@@ -874,3 +874,112 @@ deploy and stand down. Every number is a guess. Levers are in
     shot that used to land should still land.
 17. **Round 5's SMOKE-TEST item 15 said townsfolk are unarmed** — still true
     for all but the two duelists, who now openly carry by design.
+
+---
+
+## Round 7 — polish
+
+**Controls added:** **M** master mute (toggles all sound) · **Esc** now opens
+the pause menu mid-game (it still releases the pointer). The main menu shows on
+load.
+
+**None of this has been watched in motion.** The machine checks cover the
+wiring — the sun swings, the fog and lamps follow, the grass shader compiled,
+the four loop files decode, mute flips, settings resize the shadow map, a
+checkpoint round-trips, the pause freeze holds, night draw calls stay in
+budget. Everything about how it *looks and feels* is yours.
+
+### The main menu, pause and settings
+
+1. **On load you get a menu**, not the game — DUST & IRON with New Game /
+   Continue (only if you have a saved checkpoint) / Settings. Click New Game:
+   the pointer locks and you are playing. The world is already running behind
+   the menu (day/night, the horse) — that is deliberate, nothing is shooting
+   yet.
+2. **Esc mid-game opens the pause menu** — Resume / Save Checkpoint / Settings /
+   Main Menu — and **the world freezes**: bandits stop, the sun stops, nothing
+   ages. Resume drops you straight back in. Judge whether the freeze reads as a
+   pause or as a hitch, and whether clicking Resume feels immediate.
+3. **Settings apply live.** Open Settings from either menu and drag each one
+   while you can see the game (pause menu, so the frame is held — or just watch
+   the next frame after Resume):
+   - **Mouse sensitivity** — a multiplier; 1.0 is the old feel.
+   - **Invert look Y** — flips mouse-Y.
+   - **Shadow quality** — Off / Low (1024) / Medium (2048) / High (2048 + a
+     tighter bias). "Off" removes all shadows; there may be a one-frame hitch
+     as materials recompile.
+   - **Draw distance** — Near / Medium / Far. This thickens or thins the fog,
+     it does **not** cull geometry (the sky dome sets the real far plane).
+   - **Master volume**, and **Mute all sound (M)** — the checkbox and the M key
+     mirror each other.
+   - Settings persist across a reload (localStorage). Clear them by wiping site
+     data if they get into a bad state.
+4. **Continue.** Take a bounty and collect it (that auto-saves), or press Save
+   Checkpoint, then reload the page. The main menu should now offer Continue,
+   and taking it should drop you back where you saved with your money intact.
+   Die out at a camp afterward — you should respawn at the checkpoint, not at
+   spawn and not at the camp stand-off.
+
+### Day / night
+
+5. **The sun actually moves.** Stand still and watch the shadows — they should
+   swing over a few minutes (a full day is `DAYNIGHT.dayLengthSec` = 210s).
+   Sunrise in the east, overhead at noon, setting in the west.
+6. **Sunset is the shot.** BUILD-PLAN.md: "the single best-looking thing this
+   game will ever do." When the sun is near the horizon the whole sky should go
+   orange, the fog warm, the sun disc large and red, long shadows. Face the
+   mesa from spawn as it happens. If it is underwhelming, `DAYNIGHT.golden` is
+   the whole palette.
+7. **Night.** The sky goes deep blue-black, the fog closes in, the world is lit
+   by a cool dim fill (the "moon"). You should still be able to see to move
+   around — if it is pitch black, `DAYNIGHT.night.hemiIntensity` /
+   `.sunIntensity` are the levers.
+8. **The town lamps come on at dusk** and go off at dawn — the glow balls light
+   up and the street gets pools of warm light. **Judge the daytime saloon:**
+   its interior lamps now go OUT in daylight, so it is lit only ambiently. If
+   it reads as too dark to see the bar and tables during the day, say so
+   (`DAYNIGHT.day.hemiIntensity`, already nudged up once, or split the two
+   saloon point lights off the street lamps so they stay on).
+9. **The crickets fade in at night** and out by morning. The piano only plays
+   inside/near the saloon. Wind is always there. Mute with **M** and confirm
+   everything stops; unmute and it comes back.
+
+### The grass wind
+
+10. **The grass sways.** Stand in a grassy patch and watch — the blades should
+    ripple, tips moving more than roots, not all in unison (it is phased across
+    the field). If it is too frantic or too subtle, `WIND.amplitude` /
+    `WIND.speed` in `config-polish.js`. The **street should still be bare
+    dirt** — no tufts should have appeared on it.
+
+### Ambience files
+
+11. **Listen to each loop for a full cycle** (wind ~27s, crickets ~10s, piano
+    ~40s). Listen for the loop point — a click, a jump in level, the piano
+    phrase restarting awkwardly. All four are CC0 (see `docs/ASSETS.md`); if
+    one has an audible seam the fix is a re-encode, and if the piano reads
+    wrong for a saloon there are two alternative CC0 tracks noted there.
+12. **Hoofbeats** should rise in pitch and volume as you spur from a walk to a
+    gallop, and drop back as you slow. It is a trot loop sped up — if it sounds
+    like a tape on fast-forward rather than a horse, `AUDIO.hoofRateGain` is
+    the lever (or it wants a real gallop sample).
+
+### The minimap
+
+13. **Top-left corner.** North-up. It should show the town as a block, the
+    bandit camps as red dots, the horse, and you as a wedge pointing the way
+    you face. Accept a bounty — a green ring should appear on the target camp.
+    If it is more clutter than help, it is the most disposable thing in the
+    round (`MINIMAP` in `config-polish.js`, or delete `src/minimap.js` and its
+    two lines in `shell.js`).
+
+### Things round 7 changed that were working before
+
+14. **The daytime look should be unchanged from round 6.** `DAYNIGHT.day` is
+    the old `SKY`/`SUN`/`FOG` values verbatim, so at mid-morning (where the
+    game starts) the world should look exactly as it did — same sky, same fog,
+    same shadows. Flag any shift.
+15. **Everything from rounds 2–6 still works** — mount and ride, the gunfight,
+    the reload, the camps, the town, the saloon door, bounties, duels, the
+    wanted level. `main.js` was split (`shell.js`) and the frame gained a
+    pause branch and a day/night tick; nothing in the simulation order moved.

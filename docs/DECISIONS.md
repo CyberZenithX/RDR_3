@@ -672,6 +672,93 @@ one star shed per `WANTED.decayInterval` while the player is beyond
 `WANTED.clearRadius` of `TOWN.center`, and the whole meter drops to zero on
 death.
 
+### ADR-039 — `config-polish.js` is the eighth config file — *Accepted*
+
+The same split ADR-009 / ADR-023 / ADR-027 / ADR-035 made, one more time:
+`config.js` was at 389 of the 400-line cap and round 7 is several small
+systems' worth of numbers. `DAYNIGHT`, `WIND`, `MENU` and `MINIMAP` landed in
+the new file. `AUDIO`'s four `loopFiles` did **not** — a loop is the sound
+system's concern whichever round added it (ADR-023's "a number lives with the
+system it is a property of"), so they went in `config-combat.js`'s `AUDIO`
+beside the one-shots.
+
+### ADR-040 — The day/night palette is keyed to sun elevation, not to the clock — *Accepted*
+
+**Context.** BUILD-PLAN.md: "Day/night cycle with a real sun arc and warm
+sunset light… do not drop the day/night cycle." The naive build drives every
+colour directly off `t` (fraction of a day), which welds the look to the arc:
+change the day length or the arc shape and every colour keyframe is in the
+wrong place.
+
+**Decision.** `daynight.js` maps `t` to a sun **elevation** (sin of the sun
+angle) and lerps between three elevation-keyed palettes — `DAYNIGHT.night`
+(sun well down), `golden` (sun on the horizon, dawn *and* dusk), `day` (sun
+high). The arc formula and `dayLengthSec` can be retuned without touching a
+colour; the palettes can be retuned without touching the clock. `day` is the
+round 0–6 values verbatim, so midday renders exactly as before.
+
+**Two sun vectors.** The shadow-casting `DirectionalLight` needs its direction
+kept above the horizon (a raking shadow camera degenerates), so
+`world.sunDirection` is clamped at `minLightElevation` and lerped toward a
+fixed `moonDir` once the sun is down — night is carried by *intensity*, not
+geometry. The sky dome's `sunDirection` is a separate clone that follows the
+**true** sun below the horizon so the disc sets. `sky.js` allocates them as
+two objects for this reason.
+
+**Consequences.** `StreetLamps.setLit()` (wired in round 5, uncalled until now)
+is driven only from `daynight.js`, with threshold hysteresis. The saloon's
+three interior `PointLight`s are among the lamps, so they now go dark in
+daylight; `DAYNIGHT.day.hemiIntensity` was raised 0.62 → 0.72 to compensate and
+the result is an open `SMOKE-TEST.md` item. `daynight.update()` runs on the
+**unscaled** delta in `main.js` — a duel's slow-motion must not slow the day.
+
+### ADR-041 — Round 7's shell is a separate module; the pause menu freezes by early-out — *Accepted*
+
+**Context.** BUILD-PLAN.md's round 7 adds a main menu, a pause menu, settings,
+a checkpoint and a minimap. Wired inline, `main.js` went to 447 — over the
+400-line cap.
+
+**Decision.** `src/shell.js` (`createShell`) owns `DayNight`, `Ambience`,
+`Minimap`, the menu, `applySettings` and the checkpoint read/write, and hands
+`main.js` four hooks: `isPaused()`, `beforeFrame(raw)`, `afterFrame(raw)`,
+`onPointerLock(locked)` (+ `writeDebug`). `main.js` keeps the load sequence and
+the load-bearing per-frame order untouched; the shell wraps it at the outside.
+
+**The pause menu freezes by a single top-of-loop early-out**
+(`if (shell.isPaused()) { render; __frames++; return; }`), not by gating each
+system — that keeps the frame order a non-issue and the freeze uniform. The
+**boot main menu does not freeze** (`isPaused()` is false in `'main'` mode):
+the world sims quietly behind it, which is also what lets every pre-round-7
+smoke check keep driving state through `window.__debug` with no knowledge of
+the menu. Settings apply live through a callback and persist to `localStorage`;
+the checkpoint is one record behind `player.respawn()` (ADR: BUILD-PLAN.md said
+this would "slot in without touching combat code", and it did — one `import`
+and a three-line branch in the one function).
+
+### ADR-042 — Looping ambiences are a second audio path, and the grass wind is `onBeforeCompile` — *Accepted*
+
+**Context.** `audio.js`'s `play()` is a round-robin of one-shot voices that
+restart on every call — wrong for a two-minute wind bed. And BUILD-PLAN.md
+names four exact files (`wind`, `crickets`, `piano`, `hoofbeats`) that must
+degrade to silence when absent.
+
+**Decision.** `audio.js` grew a `loop()` beside `play()`: one persistent
+`THREE.Audio` (or `PositionalAudio` for the saloon piano) per bed, with a live
+`setGain()` the `Ambience` mixer eases. A missing file yields an **inert
+handle** whose methods no-op, so `ambience.js` never null-checks. Loop misses
+go in `audio.missingLoops`, *not* `audio.missing`, so the round-3 "all three
+sounds loaded" check is unaffected, and the four are deliberately absent from
+`AUDIO.maxOnsets` (a loop is not a trigger pull). The four files were fetched
+CC0 and encoded this round with a bundled `ffmpeg-static` (ASSETS.md), looped
+by a tail-over-head `acrossfade`.
+
+**The grass wind is a shader injection**, not new geometry or a CPU pass:
+`grass.js`'s `installWind()` splices a height-weighted, world-XZ-phased offset
+into the tuft `MeshStandardMaterial` via `onBeforeCompile`, baking `WIND.*` in
+as literals and exposing one `uWindTime` uniform that `world.update()` advances.
+`STREET.grassKeepOut` needs no shader handling — `recenterGrass` already never
+places a tuft on the street.
+
 ---
 
 ## Superseded decisions

@@ -18,6 +18,7 @@ import { BANDIT, HEALTH } from './config-ai.js';
 import { isKeyDown, isPointerLocked } from './input.js';
 import { resolveCollisions } from './collision.js';
 import { Health } from './health.js';
+import { loadCheckpoint } from './checkpoint.js';
 
 // Reused every mounted frame — nothing here allocates. See setSaddle().
 const _rideEuler = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -354,18 +355,21 @@ export class Player {
   }
 
   /**
-   * THE respawn — spawn point or last camp approached, whichever is nearer to
-   * where you died. "At the camp" is a stand-off ring `BANDIT.respawnStandoff`
-   * out on the town side: taken literally it drops you among the men who just
-   * killed you. Round 7 replaces this function's body with a localStorage
-   * checkpoint and nothing else has to change.
+   * THE respawn. A saved checkpoint (checkpoint.js — round 7) wins outright;
+   * failing that, the spawn point or the last camp approached, whichever is
+   * nearer to where you died. "At the camp" is a stand-off ring
+   * `BANDIT.respawnStandoff` out on the town side, because taken literally it
+   * drops you among the men who just killed you.
    */
   respawn() {
     let x = SPAWN.x;
     let z = SPAWN.z;
     let yaw = SPAWN.yaw;
+    const cp = loadCheckpoint();
     const camp = this._lastCamp;
-    if (camp) {
+    if (cp) {
+      ({ x, z, yaw } = cp);
+    } else if (camp) {
       const toSpawn = Math.hypot(this.position.x - SPAWN.x, this.position.z - SPAWN.z);
       const toCamp = Math.hypot(this.position.x - camp.x, this.position.z - camp.z);
       if (toCamp < toSpawn) {

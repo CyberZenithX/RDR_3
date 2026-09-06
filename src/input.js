@@ -54,8 +54,15 @@ export function initInput(canvas) {
   // precisely while the pointer is unlocked, so it — not the canvas — is what
   // actually receives the click. Binding only to canvas meant the "click to
   // play" prompt was never clickable.
-  document.addEventListener('click', () => {
-    if (!locked) canvas.requestPointerLock();
+  //
+  // Round 7: the `[data-noplay]` guard. The main/pause menu is clickable UI
+  // that must NOT start play — its own buttons request pointer lock themselves
+  // where that is what they mean. This is the `e.target` guard docs/ARCHITECTURE.md's
+  // note on this listener anticipated a future overlay would need.
+  document.addEventListener('click', (e) => {
+    if (locked) return;
+    if (e.target instanceof Element && e.target.closest('[data-noplay]')) return;
+    canvas.requestPointerLock();
   });
 }
 

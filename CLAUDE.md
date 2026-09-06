@@ -24,6 +24,9 @@ open a file, and points at `docs/` for everything else.
 | bandits, camps, health, dying, respawn | [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-027..030, then [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)'s Bandits section |
 | the town, buildings, the saloon, townsfolk, lamps | [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-031..034, then [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)'s Town section |
 | bounties, the bounty board, duels, the wanted level, deputies | [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-035..038, then [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)'s Round 6 section |
+| day/night, the sun arc, sky/fog colour, exposure, lamps | [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-040, then `src/daynight.js`'s header |
+| the main menu, pause, settings, the checkpoint, the minimap | [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-041, then `src/shell.js`'s header |
+| wind on the grass, the looping ambiences | ADR-042, then `src/grass.js` / `src/ambience.js` headers |
 | a bug that smells familiar | [`docs/DEVELOPMENT-NOTES.md`](docs/DEVELOPMENT-NOTES.md) |
 | models, licences, scaling, what can't be fetched | [`docs/ASSETS.md`](docs/ASSETS.md) |
 | what the round you're starting must watch out for | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
@@ -45,18 +48,24 @@ open a file, and points at `docs/` for everything else.
 | 4 — bandits | **done** | `round-4` |
 | 5 — town | **done** | `round-5` |
 | 6 — bounties, duels, wanted | **done** | `round-6` |
-| 7 — polish | not started | |
+| 7 — polish | **done** | `round-7` |
 
-**Next round: 7 — polish.** Read [`docs/ROADMAP.md`](docs/ROADMAP.md) before you
-start. In order, stopping when quality drops: day/night cycle (the lamps'
-`StreetLamps.setLit(false)` is already wired and tested — that is the switch),
-then the wind-swayed grass shader, then the four looping ambient sounds, then
-main menu / pause / settings / checkpoint save / minimap. **Do not drop the
-day/night cycle.** Round 6 left `combat.js` at 374, `player.js` at 393 and
-`horse.js` at exactly 400 — none has room, split on a real seam before adding.
-Round 6's own feel (bounty reward balance, duel window, wanted decay rate,
-deputy pressure) is entirely unjudged — see `SMOKE-TEST.md`; a reported break
-comes before any new work.
+**All seven rounds are done.** Round 7 shipped the whole list: the day/night
+cycle, the wind-swayed grass, the four looping ambiences (real CC0 files, now
+in `audio/`), master mute on `M`, main menu + pause + settings, the
+localStorage checkpoint, and the corner minimap — plus a performance pass (63
+draw calls at night with the lamps lit, against the ~120 budget).
+
+**Nothing about round 7's feel has been watched** — the sunset palette, the day
+length (`DAYNIGHT.dayLengthSec` = 210s), the grass sway strength, the ambience
+mix, whether the pause freeze is jarring, whether the daytime saloon is dark
+now that its lamps go out. All in `SMOKE-TEST.md`. And rounds 3–6's feel is
+*still* unjudged (the gunfight, the camp fight, the town, the bounty loop, the
+duel) — a reported break there comes before anything new.
+
+If there is an 8th session it is **polish-of-polish and bug response**, not a
+new feature round. `main.js` is 343, `shell.js` 160, `player.js` 397 — split
+before adding.
 
 ---
 
@@ -68,20 +77,22 @@ One line per file. Long form in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 |---|---|
 | `index.html` | Import map (→ `/vendor/three/`, not a CDN), overlay markup, CSS, data-URI favicon. Boots `/src/main.js`. |
 | `vendor/three/` | three.js **0.160.0**, vendored as committed files: the 3 modules we import, plus `LICENSE`. |
-| `src/main.js` | Entry point. Renderer/scene setup, load sequence, the animation loop, `window.__debug`. **Frame order is load-bearing** — see below. |
-| `src/config.js` | Every tunable except the horse's. |
+| `src/main.js` | Entry point. Renderer/scene setup, load sequence, the animation loop, `window.__debug`. **Frame order is load-bearing** — see below. Round 7's shell is three calls: `shell.isPaused()` (skip the frame), `shell.beforeFrame(raw)`, `shell.afterFrame(raw)`. |
+| `src/config.js` | Every tunable except the horse's, combat's, the town's, the citizens', the bounty loop's — and round 7's. |
+| `src/config-polish.js` | **New (round 7).** The EIGHTH config file (ADR-039): `DAYNIGHT` (the sun-arc palettes, keyed to elevation), `WIND` (grass sway), `MENU` (settings defaults, shadow sizes, fog multipliers), `MINIMAP`. |
 | `src/config-horse.js` | Every horse tunable: `HORSE`, `HORSE_ANIM`, `RIDING_POSE`, `TACK`, `PLACEHOLDER_HORSE`, clip candidates — **plus** the mounted/airborne accuracy penalties and the aiming steer rates. |
-| `src/config-combat.js` | Every gun tunable: `GUN`, `COMBAT`, `AIM_POSE`, `VFX`, `TARGETS`, `AUDIO`. |
+| `src/config-combat.js` | Every gun tunable: `GUN`, `COMBAT`, `AIM_POSE`, `VFX`, `TARGETS`, `AUDIO` — `AUDIO` now also carries round 7's four `loopFiles` and their mix (a loop lives with the sound system, whichever round added it). |
 | `src/config-ai.js` | Every bandit tunable: `BANDIT`, `CAMPS`, `CAMP_PROPS` — **plus `HEALTH`**, the whole game's lethality model (ADR-027). |
 | `src/config-town.js` | **New.** The town's built fabric: `STREET`, `TOWN_BUILD`, `TOWN_COLORS`, `SIGNS`, `BUILDINGS` (the hand-placed coordinate list), `SALOON`, `HITCH`, `LAMPS`, `DOOR`. `TOWN` — the plateau — stays in `config.js`. |
 | `src/config-townsfolk.js` | `TOWNSFOLK` (+ `duelist` flag on two spawns, round 6). Split out under the line cap on `config-ai.js`'s seam: the citizens are their own system. |
 | `src/config-bounty.js` | **New (round 6).** `BOUNTY`, `DUEL`, `WANTED`, `DEPUTY` — the read/ride/fight/collect loop, the scripted duel, the star meter and the lawmen. The seventh config file; one system's numbers. Deputy toughness is not here — it reuses `HEALTH.banditMax` (ADR-036). |
 | `src/noise.js` | Seeded PRNG + simplex + fbm + smoothstep. No internal deps. |
 | `src/terrain.js` | `heightAt` / `normalAt` / `buildTerrain` / `groundHeightAt` — plus **floor plates** (`addFloorPlate`), which is what finally makes `groundHeightAt` differ from `heightAt` (ADR-031). |
-| `src/sky.js` | Sky dome shader, sun + hemisphere light, fog, shadow follow. |
+| `src/sky.js` | Sky dome shader, sun + hemisphere light, fog, shadow follow. The dome's `sunDirection` uniform is now a **clone** of the returned vector — `daynight.js` moves the light one way (clamped above the horizon) and the disc the other (down past it). |
+| `src/daynight.js` | **New (round 7).** `DayNight` — one clock `t` in [0,1), a sun elevation/azimuth arc, and the whole atmosphere lerped between three elevation-keyed palettes: sun colour + intensity, hemisphere light, sky gradient, fog, exposure, background, and `StreetLamps.setLit()`. Exposes `nightFactor` / `isNight` / `elevation` / `setT()`. |
 | `src/props.js` | Rocks, cacti, dead trees as `InstancedMesh`; registers a collider (with `top` and `meta.kind`) per placement. |
-| `src/grass.js` | Player-following instanced grass pool. |
-| `src/world.js` | Orchestrator only, ~35 lines. |
+| `src/grass.js` | Player-following instanced grass pool. Round 7 injects a per-vertex wind sway into the tuft material via `onBeforeCompile` (height-weighted, phased by world XZ); `updateGrassWind(state, time)` advances the one `uWindTime` uniform. Street keep-out is unchanged — recenterGrass still never places a tuft there. |
+| `src/world.js` | Orchestrator only, ~43 lines. `update(playerPos, dt)` — `dt` feeds only the grass-wind clock. Returns `sun` / `hemi` / `skyDome` / `sunDirection` for `daynight.js`. |
 | `src/collision.js` | The one collider array + `resolveCollisions(pos, radius, ignore, clearY)`. Round 5 gave `resolveBox` its first caller **and flipped its rotation sign** so `rot` means what `Object3D.rotation.y` means. |
 | `src/assets.js` | `loadGLTF`, `findClip`, `measureHeight`, `enableShadows`. |
 | `src/rig-clone.js` | Skinned deep-copy. `Object3D.clone()` shares a `SkinnedMesh`'s skeleton; this rebinds it. Stands in for `SkeletonUtils`, which cannot be fetched (ADR-029). |
@@ -90,7 +101,7 @@ One line per file. Long form in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `src/horse-character.js` | `createHorseCharacter()` — `horse.glb` + locomotion + the one-shot jump clip. |
 | `src/placeholder-human.js` | Procedural fallback rig for the player. |
 | `src/placeholder-horse.js` | Procedural fallback rig for the horse. |
-| `src/player.js` | Movement, jump, gravity, grounding, collision, locomotion state, the mounted branch — plus health, dying, and **`respawn()`, the one function** round 7 swaps for a real checkpoint. |
+| `src/player.js` | Movement, jump, gravity, grounding, collision, locomotion state, the mounted branch — plus health, dying, and **`respawn()`, the one function**. It now consults `loadCheckpoint()` first (a saved checkpoint beats the spawn/camp choice); nothing else changed. |
 | `src/horse.js` | Everything **horizontal**: steering (normal *and* aiming), lean, stamina, collider, mount toggle. |
 | `src/horse-ai.js` | The unmounted wander/follow/whistle brain. Decides a heading and a speed; `horse.js` integrates them. |
 | `src/bandits.js` | The camps: one GLB load, a cloned rig per man, the shared ray-ignore set, the activation radius, `raycast()` / `hit()` / `hearShot()`. |
@@ -114,6 +125,11 @@ One line per file. Long form in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `src/duel.js` | **New (round 6).** The stand-and-draw, fully scripted (ADR-037). `faceoff→standoff→draw→resolved`; the outcome is the player's reaction time against `DUEL.window`, not a raycast. Freezes the player (main.js calls `poseParticipants()` instead of horse/player update), scales the world `dt` for slow-mo, and hands the camera a third framing via `tpCamera.setDuelShot()`. |
 | `src/deputies.js` | **New (round 6).** The wanted level (read off `townsfolk.crimeCount`, ADR-038) and the lawmen it calls. Deputies are `Bandit` instances (ADR-036) parked out of the world at `(DEPUTY.parkX, parkZ)` until a star spike teleports them in around the player; stood down — not killed — when it clears. A dead deputy is spent for the session. |
 | `src/tuning.js` | **New, debug only.** Live slider panel over the feel constants (F2, or `?tune`), with a Copy button that emits only what changed. Builds no DOM until opened. |
+| `src/shell.js` | **New (round 7).** The "around the game" layer, split off main.js: constructs `DayNight` / `Ambience` / `Minimap` / the menu, owns `applySettings` and the checkpoint read/write, and hands main.js `isPaused()` / `beforeFrame(raw)` / `afterFrame(raw)` / `onPointerLock(locked)` / `writeDebug(d)`. |
+| `src/menu.js` | **New (round 7).** Main menu = boot screen; pause menu = the same overlay reopened by Esc (`isPaused()` then true → main.js freezes the frame). Settings persist to `localStorage` and apply live via a callback. All markup/CSS is in `index.html`; `[data-noplay]` on `#menu` is why `input.js` no longer treats a menu click as "start playing". |
+| `src/checkpoint.js` | **New (round 7).** `saveCheckpoint` / `loadCheckpoint` / `clearCheckpoint` / `hasCheckpoint` — one localStorage record (x, z, yaw, money, health). Every call try/caught. |
+| `src/ambience.js` | **New (round 7).** The four looping beds: `wind` (flat), `crickets` (faded by `nightFactor`), `piano` (positional at the saloon bar), `hoofbeats` (gain + rate tied to the gallop). Every voice is an inert `Loop` handle when its file is missing. |
+| `src/minimap.js` | **New (round 7).** A 2D canvas redrawn each frame — north-up, town footprint, bandit camps, an accepted bounty, deputies, the horse, the player wedge. The most severable thing in the round. |
 | `src/riding-pose.js` | The hand-authored seated pose, bone by bone. Also the finger-grip axes. |
 | `src/aim-pose.js` | The hand-authored **aiming** pose: right arm, `Chest`, `Head`, recoil, the reload dip. Runs after the riding pose and claims a disjoint bone set — that split *is* the mounted-shooting blend. |
 | `src/weapons.js` | The procedural revolver, its hand-bone attachment, and the muzzle empty every shot starts from. Generic across skeletons. |
@@ -340,6 +356,53 @@ Round 6 wrapped this: **`duel.update(raw, …)` runs before everything**, on the
 `townsfolk.crimeCount`, which `combat.update()` just brought current);
 `bounties.update()` runs after `town.update()`.
 
+Round 7 wrapped it again, at the outside: **`shell.isPaused()` first** — true
+only while the *pause* menu is open (not the boot main menu), and then the
+frame is `renderer.render()` + `__frames++` + `return`, nothing simulated, no
+reorder. Then **`shell.beforeFrame(raw)`** (the `M` mute edge, and
+`dayNight.update(raw)` on **real** time — a duel's slow-mo must not stop the
+day), before `tpCamera.handleLook()`. **`shell.afterFrame(raw)`** (ambiences,
+minimap, checkpoint auto-saves) runs just before `renderer.render()`.
+
+## Before modifying the day/night cycle, the menu shell, or the checkpoint
+
+Read [`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-039 through ADR-042, then the
+headers of `src/daynight.js` / `src/shell.js`.
+
+- **The palettes are keyed to sun ELEVATION, not to `t`.** `daynight.js` maps
+  `t` to an elevation, then lerps the two nearest of `DAYNIGHT.{night, golden,
+  day}`. Retune the arc (`dayLengthSec`, the azimuth/elevation formula) without
+  touching a single colour; retune the look without touching the clock. `day`
+  is the round 0–6 values, so midday still renders exactly as it always has.
+- **Two sun vectors.** `world.sunDirection` is the shadow-casting light's
+  direction — `daynight.js` clamps its `y` above the horizon
+  (`minLightElevation`) and lerps it to a fixed `moonDir` at night, because a
+  raking shadow camera breaks. The sky dome's `sunDirection` **uniform** is a
+  separate clone that follows the true sun DOWN past the horizon, so the disc
+  actually sets. `sky.js` makes them separate objects on purpose.
+- **`StreetLamps.setLit()` is driven only from here**, with hysteresis so a lamp
+  never strobes at the threshold. Nothing else should call it. A smoke check
+  that toggles it directly must restore it to `dayNight.isNight` afterward, or
+  the cycle's cache (`_lampsLit`) and the real state disagree for the rest of
+  the run.
+- **The saloon's interior lights now go OUT in daylight** (they are three of
+  `LAMPS.points`, and `setLit` is all-or-nothing). `DAYNIGHT.day.hemiIntensity`
+  was nudged 0.62 → 0.72 to keep the interior readable without them; whether
+  that is enough is a `SMOKE-TEST.md` item.
+- **The pause menu freezes the sim by a top-of-loop early-out**, not by gating
+  each system — do not turn it into a per-system `if (!paused)`. The boot main
+  menu deliberately does **not** freeze (`isPaused()` is false in `'main'`
+  mode): the world sims quietly behind it and every existing smoke check drives
+  state through `window.__debug` regardless.
+- **`player.respawn()` consults `loadCheckpoint()` first.** That is the whole
+  round-7 change to the "one function" — a saved checkpoint beats the
+  spawn-or-camp choice. Checkpoints auto-save on entering the saloon and on a
+  bounty paying out (`shell.afterFrame`), and from the pause menu's Save button.
+- **`input.js`'s document-click "start playing" listener now skips
+  `[data-noplay]`.** `#menu` carries it; its own buttons call
+  `requestPointerLock()` where that is what they mean. A new clickable overlay
+  needs the same attribute or clicking it will grab pointer lock.
+
 ## Before modifying the camera
 
 - The mounted camera **must** be passed `horse.collider` as `ignoreCollider`,
@@ -424,6 +487,25 @@ confirm a new check **fails on the pre-fix code**.
 Fixed bugs live in [`docs/DEVELOPMENT-NOTES.md`](docs/DEVELOPMENT-NOTES.md).
 These are still open:
 
+- **Round 7's whole look and feel is unwatched.** The sunset palette
+  (`DAYNIGHT.golden`), the day length (210s — a full cycle every 3.5 min), the
+  grass sway amplitude (`WIND.amplitude` 0.09), the ambience mix
+  (`AUDIO.loopVolumes`), whether the pause freeze reads as a pause or a hitch,
+  whether the daytime saloon is too dark now its lamps go out, whether the
+  minimap is useful or clutter. All set from numbers and one headless smoke
+  run. Every lever is in `config-polish.js` / `config-combat.js`'s `AUDIO`.
+- **The four ambient loops are real CC0 files now** (`docs/ASSETS.md`), fetched
+  and encoded this round with a bundled `ffmpeg-static`. They loop via a
+  tail-over-head crossfade; a seam may still be audible on a quiet listen
+  (wind/crickets/piano) — the fix is a re-encode, not code. `hoofbeats.ogg` is
+  a trot loop played back faster as the gallop builds; whether that reads as
+  hooves or as a sped-up tape is unjudged.
+- **The minimap is north-up and never rotates.** Fine for orientation, but
+  there is no "you are here relative to the bounty" beyond a dot. `MINIMAP.range`
+  (300m) is the only lever; drop the whole file if it does not earn its corner.
+- **Settings' "draw distance" is a fog multiplier only** — it does not move
+  `camera.far` (the sky dome sits at `RENDER.far * 0.46` ≈ 828 and clipping it
+  would show void). So "Near" makes the air thick, it does not cull geometry.
 - **Nobody has fired a shot in real play.** Round 3's whole feel — fire rate,
   reload length, spread, recoil kick and shake, the aim camera's distance and
   FOV, how the aiming pose reads in motion, whether steering the horse on A/D
@@ -525,9 +607,9 @@ These are still open:
 - **`saddleSway` carries a ~-0.69 constant bias while moving and clips at -1**,
   because its rest height was captured against the idle clip. Documented and
   deliberately not fixed; it changes the feel of a system nobody has watched.
-- **No wind on the grass** (round 7), **no saddle/stirrup geometry** — the
-  rider's boots hang where stirrups would be, holding nothing. Audio is now
-  three one-shots (gunshot / reload / hit); round 7 owns the ambience.
+- **No saddle/stirrup geometry** — the rider's boots hang where stirrups would
+  be, holding nothing. (Grass wind and the four ambient loops landed in
+  round 7.)
 - **A procedural saddle was built and withdrawn — do not rebuild it the same
   way.** `saddle.js` placed a saddle/girth/stirrup group at the seat point each
   frame and set `group.rotation` from the horse's yaw and lean. In play it

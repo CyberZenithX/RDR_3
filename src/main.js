@@ -25,6 +25,7 @@ import { buildTown } from './town.js';
 import { buildDeputies } from './deputies.js';
 import { Bounties } from './bounties.js';
 import { Duel } from './duel.js';
+import { createShell } from './shell.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, RENDER.maxPixelRatio));
@@ -119,6 +120,7 @@ async function init() {
   // Never rejects: a missing .ogg is one warning and silence, per BUILD-PLAN.md.
   const audio = await createAudio(camera, scene);
   window.__debug.audioMissing = audio.missing;
+  window.__debug.audio = audio; // debug hook, not read by gameplay code
 
   ui.setLoadingText('rousing the bandits…');
   // Never rejects: a missing bandit.glb is one warning and eleven capsule
@@ -151,21 +153,44 @@ async function init() {
   // Debug only: hidden until F2 (or ?tune). Builds no DOM until first opened.
   window.__debug.tuning = initTuning();
 
+  // Round 7 — the "around the game" layer: day/night cycle, looping ambiences,
+  // minimap, main/pause menu, settings and the checkpoint. See shell.js.
+  const shell = createShell({
+    renderer, scene, world, audio, player, horse, tpCamera, bandits, bounties, deputies, town,
+  });
+  window.__debug.dayNight = shell.dayNight; // debug hook, not read by gameplay code
+  window.__debug.minimap = shell.minimap; // debug hook, not read by gameplay code
+  window.__debug.menu = shell.menu; // debug hook, not read by gameplay code
+  window.__debug.audioMissingLoops = audio.missingLoops;
+
   initInput(renderer.domElement);
   onPointerLockChanged((locked) => {
     ui.setPointerLocked(locked);
     // The click that takes pointer lock is the user gesture browsers require
-    // before an AudioContext may start. Without this the first gunshot is
-    // silent and the console carries an autoplay warning.
-    if (locked) audio.resume();
+    // before an AudioContext may start (shell.onPointerLock calls audio.resume).
+    shell.onPointerLock(locked);
   });
 
   ui.hideLoading();
   window.__ready = true;
+  shell.showMain();
 
   const clock = new THREE.Clock();
   renderer.setAnimationLoop(() => {
     const raw = Math.min(clock.getDelta(), RENDER.maxDeltaTime);
+
+    // Round 7 — the pause menu freezes the world. Everything is skipped
+    // uniformly (no reorder), the last frame is re-rendered, and the frame
+    // counter still advances so the smoke harness's liveness check holds. The
+    // boot main menu does NOT freeze (isPaused is false there) — nothing is
+    // shooting yet and the existing checks drive state directly.
+    if (shell.isPaused()) {
+      renderer.render(scene, camera);
+      window.__frames++;
+      return;
+    }
+    // Master mute (M) and the sun arc, both on real time.
+    shell.beforeFrame(raw);
 
     tpCamera.handleLook();
 
@@ -253,9 +278,13 @@ async function init() {
     // occlusion sweep — the rider's pivot sits right on/inside it, which
     // otherwise collapses the camera to CAMERA.minDistance every frame.
     tpCamera.update(dt, player.position, player.mounted ? horse.speed : player.speed, player.mounted ? horse.collider : null);
-    world.update(player.position);
+    world.update(player.position, raw); // raw feeds the grass-wind clock
     ui.updateBoundaryWarning(dt, player.boundaryProximity);
     ui.updateStamina(horse.staminaFraction, horse.staminaExhausted);
+
+    // Round 7 — the looping ambiences, the minimap, and the checkpoint
+    // auto-saves (on entering the saloon, and on a bounty paying out).
+    shell.afterFrame(raw);
 
     renderer.render(scene, camera);
     window.__frames++;
@@ -299,6 +328,7 @@ async function init() {
     window.__debug.deputiesActive = deputies.activeCount;
     window.__debug.duelPhase = duel.phase;
     window.__debug.duelTimeScale = duel.timeScale;
+    shell.writeDebug(window.__debug); // timeOfDay, sunElevation, nightFactor, lampsLit
   });
 }
 

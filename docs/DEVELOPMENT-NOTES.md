@@ -764,3 +764,38 @@ written, not just the ones they hit:
   the mount check as passing with the saddle lerp ~25% complete.
 - Polling a ~0.89s event from node at ~3fps headless misses it. Sample from
   inside the render loop.
+
+---
+
+## Round 7: two self-inflicted regressions the smoke suite caught
+
+Both are what you would expect from a round whose whole job is to *change* how
+the world looks and where the code lives — and both were caught the same run.
+
+**The lamp check asserted the lamps were lit at boot.** The round-5 check read
+the lamp intensities at boot as its "lit" baseline. Round 7's day/night cycle
+now calls `StreetLamps.setLit(false)` on its first `apply()` (it is daylight at
+`DAYNIGHT.startT`), so the baseline read all zeros and the check failed
+"the interior/porch lights are dark at boot". **Fix:** the check now
+`setLit(true)` itself to establish the baseline, runs the off/on cycle, and
+restores to `dayNight.isNight`. **Lesson:** a check that reads a boot-time
+state as its reference is really asserting "nothing has a reason to change this
+yet" — and a later round's whole point can be to give it one. Force the state
+you mean to test.
+
+**`main.js` went to 447 lines.** The day/night + menu + settings + checkpoint +
+minimap wiring inline blew the 400-line cap. Split to `src/shell.js`
+(ADR-041): everything that is *around* the simulation rather than *in* it,
+handed back as `isPaused()` / `beforeFrame` / `afterFrame`. `main.js` dropped
+to 343 and its load-bearing per-frame order was not touched. **Lesson:** the
+cap is not a nuisance — the seam it forces here ("shell vs simulation") is a
+real one, and finding it took ten minutes, not an hour, because the round was
+built expecting to have to.
+
+**Also worth recording:** the four ambient `.ogg` files were fetched CC0 from
+OpenGameArt and encoded in-session with `npm i --no-save ffmpeg-static` (a
+dev-time binary, allowed). `loudnorm` IS correct for a sustained loop — the
+round-3 rule against it is specific to transients. Seamless looping without an
+ffmpeg loop-point concept: split head `0..D-X` / tail `D-X..D`, `acrossfade`
+the tail into the head → a clip of length `D-X` whose ends are the same
+sample. Full recipe in [ASSETS.md](ASSETS.md).

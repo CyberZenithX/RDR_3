@@ -165,6 +165,10 @@ WAVs.
 | `gunshot.ogg` | OpenGameArt "Gunshots" by *kurt*, the `22 Magnum.wav` track | **CC0** | Swapped post-round-3: the `Black Powder.wav` cut was a muffled low boom that did not read as a revolver. `.22 WMR` is a cartridge revolver round — a sharp crack that fits the game's Colt SAA. **The source is a 3-shot take** (≈2.16s; reports at ≈0.24 / 0.94 / 1.66s) — shot 1 is cut out, 0.18–0.78s, with a 100ms fade over the tail. Source hard-clips at 0 dBFS, so the encode is `volume=-4dB` and no dynamics; decodes to −3.3 dBFS. 0.60s, 8KB. `AUDIO.volumes.gunshot` stays 1.0. |
 | `reload.ogg` | OpenGameArt "2 Gun Reloads" by *starninjas*, `gun_reload.1.ogg` | **CC0** | Already Ogg at source, and **clipped**: it decodes to +4.97 dBFS, so it needs -12 dB rather than the -7 that "reduce by a few dB" would suggest. 0.96s, which is why `COMBAT.reloadTime` is 1.7 — the clip plays once inside the lockout rather than looping. 14KB. |
 | `hit.ogg` | Kenney "Impact Sounds", `impactPlank_medium_000.ogg` | **CC0** | Wood impact — barrels are the main thing being shot. Already Ogg at source. 0.78s, 11KB. |
+| `wind.ogg` | OpenGameArt "wind1" by *Luke.RUSTLTD*, `wind1.wav` | **CC0** ("License(s): CC0", no notice) | Synthesized wind (PureData), no third-party samples. 60s source → first 30s → tail-over-head `acrossfade` (3s) → **27s seamless loop**, mono, `loudnorm I=-23`. Peak −6.7 dBFS. 204KB. |
+| `crickets.ogg` | OpenGameArt "Crickets ambient noise (loopable)" by *Wolfgang_*, `crickets.mp3` | **CC0** ("License(s): CC0"; optional courtesy credit "Ted Kerr" — CC0 requires none) | Night texture. 11.5s → 11.4s → `acrossfade` (1.5s) → **10s loop**, mono, `loudnorm I=-22`. Peak −10.3 dBFS. 97KB. |
+| `piano.ogg` | OpenGameArt "Ragtime Jazz" by *Tarush Singhal*, `ragtime.mp3` | **CC0** ("License(s): CC0") | Solo ragtime piano — the iconic saloon sound. 1:52 source → 12–54s window → `acrossfade` (2.5s) → **39.5s loop**, mono, `loudnorm I=-23 TP=-4` then −2 dB. Peak −5.7 dBFS. Positional at the saloon bar. 400KB. Alternatives if it reads wrong: `drunken-saloon` ("No attribution necessary"), `miniature-saloon`. |
+| `hoofbeats.ogg` | OpenGameArt "Horse trotting" by *EZduzziteh*, `Trot.ogg` | **CC0** ("License(s): CC0") | A trot loop; `ambience.js` plays it faster as the gallop builds. 12.45s, mono, 20 ms edge fades (no crossfade — a crossfade blurs a hoof-fall), `loudnorm I=-20`. Peak −1.5 dBFS. 96KB. |
 
 ### Two rules for adding audio, both learned the hard way
 
@@ -199,9 +203,25 @@ unclipped and the mix stays a number in config.
 says **CC-BY 3.0**. It was not used. Open the archive and read the licence file
 before trusting the listing.
 
-Round 7 needs `wind.ogg`, `crickets.ogg`, `piano.ogg` and `hoofbeats.ogg` —
-same sources, same pipeline, and `audio.js` will need a `loop()` alongside its
-one-shot `play()`.
+**Round 7 shipped `wind.ogg`, `crickets.ogg`, `piano.ogg`, `hoofbeats.ogg`** —
+all CC0 from OpenGameArt (table above), fetched and encoded in-session with a
+`npm i --no-save ffmpeg-static` binary. Three notes for the next person who
+touches audio:
+
+- **`loudnorm` IS the right tool here** — the round-3 rule against it is
+  specific to a *one-shot* (a spike and a lot of near-silence). A wind bed or a
+  cricket loop is sustained, so its integrated and peak levels track, and
+  `loudnorm I=-20..-24` puts each one comfortably under the −4 dBFS combat
+  one-shots. `AUDIO.loopVolumes` in `config-combat.js` is still the by-ear
+  balance lever.
+- **The seamless-loop recipe**, since ffmpeg has no "loop point" concept:
+  take a clip of length D, split head `0..D−X` and tail `D−X..D`, then
+  `acrossfade=d=X` the **tail into the head**. The result is length `D−X` and
+  its first and last samples are the same instant of the source, so it loops
+  clean. Do NOT `afade` to silence at the edges — that dips every loop.
+- The four loops load through `audio.loop()`, their misses go in
+  `audio.missingLoops` (not `.missing`), and they are absent from
+  `AUDIO.maxOnsets` on purpose — a loop is not a trigger pull.
 
 ## No gun model, and why the revolver is procedural
 

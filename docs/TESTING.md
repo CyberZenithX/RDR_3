@@ -468,7 +468,45 @@ The last three sample the arc from **inside** the render loop.
 - **the horse takes itself to the hitching rail** and settles facing it, and a
   whistle in town is not overridden by the rail
 - street lamps: one glow instance per post, `setLit(false)`/`(true)` really
-  darkens and relights, and every lamp collider carries a finite `top`
+  darkens and relights, and every lamp collider carries a finite `top`. Round 7
+  note: the day/night cycle has already called `setLit()` by the time this
+  check runs (daylight at boot = lamps off), so it forces the lit baseline
+  itself and restores to `dayNight.isNight` afterward, or the cycle's cache and
+  the real state disagree for the rest of the run.
+
+**Round 7 — polish**
+
+- **the sun arc drives everything**: `dayNight.setT(0.5)` vs `setT(0.0)` —
+  elevation swings ±0.8, the sun dims to under a third at night, the fog
+  thickens, `nightFactor` swings, the lamps follow, the sky disc is gone at
+  midnight and its true direction is below the horizon, and the shadow light's
+  own `y` stays clamped ≥ `minLightElevation` even at night
+- **the wind sway compiled into the grass shader**: `windApplied`, an
+  `onBeforeCompile` that fired, `uWindTime` in the vertex shader and being
+  advanced by `world.update()`
+- **the four ambiences are wired, present and sane**: `AUDIO.loopFiles` is
+  exactly the four BUILD-PLAN.md names, `audio.loop()` exists, four handles
+  built, none of the four leaked into `AUDIO.maxOnsets`, `audioMissing`
+  (round 3) unaffected — plus each `.ogg` decoded: mono, > 2s, not clipped, not
+  silent (rule 1b on a fetched-and-encoded asset)
+- **master mute**: `setEnabled(false)` disables and a one-shot returns null;
+  `setEnabled(true)` restores
+- **settings**: `menu._apply({shadowQuality})` resizes `sun.shadow.mapSize` /
+  disables the shadow map for `'off'`; `{drawDistance}` scales `dayNight.fogScale`
+- **checkpoint**: `saveCheckpoint` round-trips through `loadCheckpoint`, and
+  `player.respawn()` lands at the checkpoint even with a `_lastCamp` set (the
+  camp fallback must lose to a saved checkpoint)
+- **the minimap** canvas is in the DOM, has a 2D context and is `MINIMAP.size`
+  wide (a throw in `update()` would already have failed the run)
+- **the pause menu freezes the sim**: `menu.showPause()` → `isPaused()`, frames
+  keep advancing (the harness liveness check), but `dayNight.t` does not move
+- **draw calls at night with the lamps lit** stay under ~120 (63 measured) —
+  the round-7 performance-pass floor
+
+Recipe: the harness never takes pointer lock, so it drives the menu through
+`window.__debug.menu` (`showPause()` / `hide()` / `_apply()`) and the clock
+through `window.__debug.dayNight.setT()`, the same spirit as
+`horse.handleMountToggle`.
 
 Two recipes worth reusing:
 

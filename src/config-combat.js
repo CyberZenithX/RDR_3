@@ -317,4 +317,37 @@ export const AUDIO = {
   maxOnsets: { gunshot: 1, reload: 4, hit: 1 },
   // Randomised per shot so a string of six does not sound like a loop.
   pitchJitter: 0.07,
+
+  // ---- round 7: the four looping ambiences -------------------------------
+  // BUILD-PLAN.md names these files exactly and says not to invent others.
+  // They are loaded through the SEPARATE `loop()` path (a persistent voice
+  // with a live gain), and their misses go in `audio.missingLoops`, not
+  // `audio.missing` — the round-3 "all three sounds loaded" check must not
+  // start failing on files round 7 only just introduced. A loop is not a
+  // one-shot, so it is not in `maxOnsets`: the onset assertion is for a
+  // trigger pull, not for a two-minute wind bed.
+  //
+  // These four are NOT in `audio/` yet — this session cannot fetch assets
+  // (CLAUDE.md's environment facts). The wiring is complete and every file
+  // drops straight in; until then the game runs silent, exactly as
+  // BUILD-PLAN.md's "runs silent if a file is missing" rule intends. See
+  // docs/ASSETS.md and SMOKE-TEST.md.
+  loopFiles: {
+    wind: 'wind.ogg', // looping ambient, always on, flat on the listener
+    crickets: 'crickets.ogg', // looping, faded in by the day/night cycle at dusk
+    piano: 'piano.ogg', // POSITIONAL, at the saloon bar — only audible near/inside
+    hoofbeats: 'hoofbeats.ogg', // looping, gain + rate tied to the gallop
+  },
+  loopVolumes: { wind: 0.32, crickets: 0.4, piano: 0.5, hoofbeats: 0.55 },
+  // The saloon piano's world position (near the bar) and its tight falloff, so
+  // it stays inside the building rather than drifting down the street.
+  pianoPosition: { x: -16.5, y: 9.4, z: 19.5 },
+  pianoRefDistance: 3.5,
+  pianoMaxDistance: 20,
+  pianoRolloff: 1.8,
+  // How fast crickets / hoofbeats gains ease toward their target (exp rate).
+  ambienceFadeRate: 1.6,
+  // Hoofbeats playback rate: base at a walk, + this much at a full gallop.
+  hoofRateBase: 0.55,
+  hoofRateGain: 1.05,
 };
