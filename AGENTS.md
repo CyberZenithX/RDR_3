@@ -1,4 +1,7 @@
-# CLAUDE.md — Dust & Iron
+# AGENTS.md — Dust & Iron
+
+<!-- Verbatim mirror of CLAUDE.md, for AGENTS.md-aware tooling. Edit CLAUDE.md and re-copy. -->
+
 
 Running project memory. Each round runs in a **fresh session with no memory of
 the last one**, so this file is where a session starts. It is an **index**, not

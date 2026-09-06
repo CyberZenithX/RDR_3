@@ -4,56 +4,32 @@ Forward-looking handoff notes. **BUILD-PLAN.md is the spec** — it says what
 each round must build. This file says what will bite you while building it,
 based on what already exists.
 
-Rounds 0, 1, 2, 2b, 2c, 2d, 3, 4, 5 are done. Round 6 is next.
+Rounds 0, 1, 2, 2b, 2c, 2d, 3, 4, 5, 6 are done. Round 7 is next.
 
 ---
 
-## Round 6 — bounties, duels, wanted
+## Round 6 — bounties, duels, wanted — DONE
 
-### What round 5 leaves you
+Built with almost no new geometry, as BUILD-PLAN.md promised. What it leaves
+round 7:
 
-- **The town is where the loop lives, and it is built.** The sheriff's office
-  is at (15, 22) facing the street; a bounty board outside it is a
-  `PartBuilder` push into the town's merged mesh plus a trigger volume, and
-  `town.isInsideSaloon()` is the worked example of a trigger written in a
-  building's own frame. `BUILDINGS` carries a `name` per entry the way `CAMPS`
-  does.
-- **Do not add a mesh to the town. Add a part.** Everything static in town is
-  one merged, vertex-coloured mesh (ADR-033) and the budget has headroom
-  precisely because of that. `town-geo.js`'s `PartBuilder` is the tool; three
-  smoke checks watch the number.
-- **A bounty board needs lettering, and lettering already exists.**
-  `signs.js` draws the whole town's signage into one canvas atlas and
-  `PartBuilder`'s `textured` mode puts it on a quad. A board listing three camp
-  names is that, with `CAMPS` supplying the strings instead of `BUILDINGS` —
-  join the atlas rather than starting a second textured mesh.
-- **Townsfolk already carry `Health` and can be shot** (ADR-034), which is the
-  whole foundation of the wanted level: `townsfolk.hit()` returns
-  `'hit' | 'dead'` and `combat.js` already dispatches on `kind === 'townsfolk'`.
-  What does not exist is anyone *noticing* — they run (`hearShot`), and that is
-  all. Deputies are `bandit.js` + `bandit-ai.js` with a different spawn source;
-  `character.js` is generic and `HEALTH` already has the numbers.
-- **A duel needs a camera that is not the third-person rig.** `camera.js` has
-  `setMounted` / `setAiming` as its two mode switches and they *compose* by
-  lerping between pairs — a third mode should follow that pattern rather than
-  bolting on a second camera object.
-- **`combat.js` is at 366 of the 400-line cap and `horse.js` is at exactly
-  400.** Neither has room for a feature. Split along a real seam before adding.
-- **A citizen is not a bandit and the code knows it.** `bandit-ai.js`'s cover
-  search still filters on `col.type === 'circle'`, so a fight in town will
-  never pick a *building* as cover. That is correct today (a building is not a
-  rock to peek round) and is the first thing to revisit if deputies fight in
-  the street.
-
-### The original round-6 notes
-
-- **The draw is already half-built.** ADR-026 says there is no holster: the
-  revolver is permanently in the fist, and `aim-pose.js` takes a `hold` weight
-  separate from its aim weight precisely so a real draw can animate it. The
-  gun also has `setVisible()`. Neither is used yet.
-- Duel draw is `Idle_Gun_Pointing` (a real clip).
-- `MESAS` entries are the landmarks a bounty callout can reference — "the camp
-  near the twin mesa" needs no new placement system, just an entry index.
+- **The bounty board is parts in the town mesh** (`bounties.js`
+  `buildBountyBoard()`), its camp names appended to the one sign atlas after
+  the shop signs. Still three meshes named `town*`.
+- **The wanted level never touched `combat.js`** — it counts `townsfolk.hit()`s
+  via `townsfolk.crimeCount` and `deputies.js` reads the delta (ADR-038).
+  `combat.js` gained six lines only so a shot can hit a **deputy**.
+- **Deputies are parked `Bandit`s** at `(4000, 4000)` (ADR-036), teleported in
+  on a star spike and stood down — not killed — when it clears. A dead deputy
+  is spent for the session; the pool is six.
+- **The duel is scripted, main.js does the freezing.** `player.js` (393) and
+  `horse.js` (400) had no room, so `main.js` calls `duel.poseParticipants()`
+  in place of the horse/player update while `duel.freezesPlayer`. Slow-mo is a
+  global `dt *= duel.timeScale`. The face-off camera composes by lerp in
+  `camera.js._applyDuelShot()`.
+- **The whole feel is unjudged** — reward balance, `DUEL.window`, the wanted
+  decay rate, deputy pressure, whether the slow-mo reads. All in
+  `SMOKE-TEST.md`.
 
 ## Round 7 — polish
 
@@ -80,7 +56,14 @@ Rounds 0, 1, 2, 2b, 2c, 2d, 3, 4, 5 are done. Round 6 is next.
     anything: a CC0 SFX file is very often several takes in a row, and
     `loudnorm` is the wrong tool for a transient
     ([ASSETS.md](ASSETS.md), [DEVELOPMENT-NOTES.md](DEVELOPMENT-NOTES.md)).
-- **Rounds 3, 4 and 5's whole feel is unjudged**, exactly like the horse's
+- **Round 6 added six more `bandit.glb` clones** (the deputy pool), parked
+  invisible until a wanted spike. That is 17 humanoid rigs loaded against
+  round 4's 11 — memory and clone cost, not draw calls (parked = `visible:
+  false` = zero). Draw calls at spawn measured 66 (was ~58) with the pool
+  present; the three budget checks still pass comfortably under 120, but the
+  real performance pass is round 7's, and the deputy pool size
+  (`DEPUTY.poolSize`) is a lever if it bites.
+- **Rounds 3, 4, 5 and 6's whole feel is unjudged**, exactly like the horse's
   before them — and the horse's numbers caught two real bugs that way. Round 3:
   the gunfight. Round 4: how fast a camp wakes, whether the cover shuffle reads
   as cover, the strength of the damage vignette, whether dying in ~8 seconds

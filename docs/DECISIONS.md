@@ -586,6 +586,92 @@ invulnerable prop is a worse foundation than a man who bleeds.
 
 ---
 
+### ADR-035 — `config-bounty.js` is the seventh config file — *Accepted*
+
+The same split ADR-009 / ADR-023 / ADR-027 made, for the same reason: `config.js`
+was at 389 of the 400-line cap, and round 6 is one system's worth of numbers —
+the bounty loop, the scripted duel, the star meter and the deputies. ADR-023's
+rule ("one file per SYSTEM") still decides it.
+
+The one number deliberately **not** here is deputy toughness: a lawman with a
+revolver is not a new damage model, so deputies reuse `HEALTH.banditMax` /
+`HEALTH.playerDamage` from `config-ai.js` unchanged — exactly as ADR-023 says a
+rifle in a later round would. `BOUNTY`, `DUEL`, `WANTED` and `DEPUTY` (its
+pool/park/spawn geometry only) are what landed in the new file.
+
+### ADR-036 — Deputies are `Bandit` instances, parked out of the world — *Accepted*
+
+**Context.** BUILD-PLAN.md: "deputies spawn and hunt you". `bandit.js` +
+`bandit-ai.js` already do chase / shoot / take-cover / line-of-sight, and
+docs/ROADMAP.md said deputies are "`bandit.js` + `bandit-ai.js` with a different
+spawn source".
+
+**Decision.** `deputies.js` builds a pool of `Bandit`s once (reusing
+`bandits.gltf` — the one `bandit.glb` download), each constructed at
+`(DEPUTY.parkX, DEPUTY.parkZ)` = `(4000, 4000)`, far outside the 1500-unit world
+and the 610 boundary clamp, with `root.visible = false`. A star spike teleports
+`min(stars+1, DEPUTY.maxActive)` of them in around the player and `ai.alert()`s
+them; when the meter clears they are stood down (`alerted = false`) and parked
+again once they fall `DEPUTY.despawnRadius` behind. The collider moves with the
+body in both directions — never re-added, per the moving-collider contract.
+
+**Consequences.** `Deputies` implements the small `group` surface `bandit.js` /
+`bandit-gun.js` reach back through (`rayIgnore`, `vfx`, `audio`, `targets`,
+`horse`, `hearShot`, `addCorpse`) and its own `raycast()` / `hit()` for the
+player's shots, exactly like `Bandits` and `Townsfolk`. `combat.js` gained six
+lines to fold that in. Deputies are **not** in `bandits.bandits`, so every
+round-4 bandit smoke check is untouched. A deputy that dies has its collider
+removed by `Bandit._die`, and re-adding one would break the contract — so a dead
+deputy is spent for the session and `DEPUTY.poolSize` (6) is sized for two
+waves. The synthetic camp has `count: 1` so `bandit-ai.js`'s `campWiped` flee
+never fires — deputies are called off, not routed.
+
+### ADR-037 — The duel is scripted; the player is frozen by main.js — *Accepted*
+
+**Context.** BUILD-PLAN.md's duel is a fixed sequence — face-off cut, draw
+stances, 2–5s tension, a signal, a reaction-time window, slow-mo on the win.
+None of that is AI; the opponent does exactly one thing (draw and, on your
+early/late draw, shoot back).
+
+**Decision.** `duel.js` is a state machine (`faceoff → standoff → draw →
+resolved`), and the outcome is the player's reaction time against `DUEL.window`,
+decided in code — **not** a raycast. The muzzle flashes and gunshots are played
+straight off `vfx` / `audio`, so a round drawn during the stand-off can never
+land on a bystander and raise the wanted level mid-duel. The opponent is a
+`Townsperson` flagged `duelist`, marked to the player only by openly carrying a
+revolver (`townsperson.js` keeps theirs shown) where every other citizen is
+unarmed.
+
+**Why main.js does the freezing.** `player.js` is at 393 lines and `horse.js` at
+exactly 400 — neither has room for a frozen branch. Instead `main.js` checks
+`duel.freezesPlayer` and calls `duel.poseParticipants(dt, player)` **in place
+of** the whole `horse.update()` / `setSaddle` / `player.update()` block, and
+skips `combat.pollInput()`. Both source files are untouched. Slow-mo is a global
+`dt = raw * duel.timeScale` in `main.js`; the tension timer runs on the
+**unscaled** `raw` so it cannot slow itself down.
+
+**The camera** gets a third framing that composes by lerp, like aim and mounted
+(the pattern docs/ROADMAP.md named): `camera.js._applyDuelShot()` lerps the
+ordinary damped position toward a square-on two-shot by `duel.cameraWeight`. No
+second camera object.
+
+### ADR-038 — The wanted level is counted off `Townsfolk`, not in `combat.js` — *Accepted*
+
+**Context.** BUILD-PLAN.md: "Wanted level rises if you shoot innocents." The
+obvious place is `combat.js`'s hit dispatch, which already branches on
+`kind === 'townsfolk'` — but `combat.js` was at 366 of the cap and every round
+so far has kept its own systems out of it (ADR-028: a bandit does not use
+`combat.js`).
+
+**Decision.** `Townsfolk.hit()` increments a private `_crimes` counter (a
+wounding counts, not only a kill), exposed as `townsfolk.crimeCount`.
+`deputies.js` reads the delta each frame and moves the star meter. `combat.js`'s
+only round-6 change is the six lines that let its shots *hit* a deputy — the
+wanted level itself never touches it. Decay is pure geometry in `deputies.js`:
+one star shed per `WANTED.decayInterval` while the player is beyond
+`WANTED.clearRadius` of `TOWN.center`, and the whole meter drops to zero on
+death.
+
 ---
 
 ## Superseded decisions

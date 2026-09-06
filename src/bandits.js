@@ -36,6 +36,8 @@ export class Bandits {
     this.vfx = vfx;
     this.audio = audio;
     this.targets = targets;
+    // Kept so deputies.js can clone rigs from the same one download (ADR-036).
+    this.gltf = gltf ?? null;
 
     /**
      * Colliders every bandit's own shots and line-of-sight checks pass

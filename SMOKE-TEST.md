@@ -786,3 +786,91 @@ geometry; these are the things only a person can judge.
 16. **The boardwalks.** Step up onto one and back off. It should feel like a
     step, not a teleport or a bounce, and your feet should be on the boards
     rather than in them. Same on the church's front steps.
+
+---
+
+## Round 6 — bounties, duels, wanted
+
+**Controls added:** **B** at the sheriff's bounty board (take a bounty, or
+collect a cleared one) · **F** to challenge the armed man in the street to a
+duel. Everything earlier is unchanged.
+
+**None of this has been played.** The machine checks cover the wiring — a
+bounty pays out, a duel resolves, the star meter rises and decays, deputies
+deploy and stand down. Every number is a guess. Levers are in
+`src/config-bounty.js` (`BOUNTY`, `DUEL`, `WANTED`, `DEPUTY`).
+
+### The bounty loop
+
+1. **The board reads.** Walk to the sheriff's office (east side of the street).
+   A board on posts stands just off the boardwalk with three camp names and
+   dollar amounts painted on it — COYOTE WASH, BUZZARD ROCK, DRY FORK. Judge
+   whether the lettering is legible walking up, and whether the board looks
+   like it belongs (not floating, not sunk, not blocking the door).
+2. **Press B at the board.** A HUD line should appear naming the bounty you
+   took and its reward, and a tall coloured **beam of light** should rise over
+   that camp's position on the horizon. Press B again to rotate to the next
+   camp. There is nothing to spend money on yet — that is by design.
+3. **Ride out and clear it.** Kill every bandit in the marked camp. The beam
+   should turn green and the HUD should tell you to return to the sheriff.
+4. **Ride back and press B.** The reward is added to the money counter
+   (top-right corner) and the marker goes out. Then take the next bounty.
+   Three bounties, one at a time.
+5. **The marker at distance.** From the spawn plateau, an accepted bounty's
+   beam should be findable on the horizon the way a campfire's smoke is. If it
+   reads as noise or is lost in the sky, `BOUNTY.markerHeight` / `markerColor`
+   / `markerOpacity` are the levers.
+
+### Duels
+
+6. **Two men in the street carry a revolver openly** — one by the general
+   store, one by the stable. Every other citizen is unarmed. That visible gun
+   is the "marked NPC". Walk up to one; a "press F — challenge to a duel"
+   prompt should appear within a few metres.
+7. **Press F.** The camera should cut to a side-on shot of the two of you
+   squared up, and you should not be able to move. Both draw stances, guns
+   half-raised.
+8. **The tension.** A randomised 2–5 seconds of nothing, then a large red
+   **DRAW** flashes centre-screen. That is the signal.
+9. **Draw on the signal.** Left mouse:
+   - Before the signal → you lose ("too slow"), take a couple of hits, the
+     opponent stays standing. `DUEL.penaltyDamage`.
+   - Within ~0.55s of the signal → clean kill: the opponent drops and the
+     shot plays in **slow motion** for about a second before control returns.
+     `DUEL.window`, `DUEL.slowMoScale` / `slowMoTime`.
+   - Too slow → the opponent beats you: same as drawing early.
+   Judge whether the window feels fair, whether the slow-mo reads as a beat or
+   as a stutter, and whether the camera swing in and out is a move or a lurch
+   (`DUEL.camSide` / `camHeight` / `camBlendRate`).
+10. **A beaten opponent can be re-challenged** after a short cooldown. A killed
+    one stays down. You cannot start a duel while mounted or while the law is
+    after you.
+
+### The wanted level
+
+11. **Shoot a townsperson.** A star should light in the top-right (under the
+    money). Each innocent you hit — a wounding counts, not just a kill — adds a
+    star, up to four.
+12. **Deputies come.** At one star or more, armed men (they use the bandit
+    model) should appear around you within ~34m and open fire. They behave like
+    bandits — chase, take cover, shoot. Judge whether the pressure is fair for
+    the crime, and whether more stars = more deputies reads.
+13. **Get clear of town.** Ride out past ~145m from the town centre and wait.
+    A star should drop every ~6 seconds until the meter is empty, at which
+    point the deputies break off and fall back. Dying clears the whole meter.
+14. **Deputies do not pile up.** Never more than three at once
+    (`DEPUTY.maxActive`). After a few waves of getting them all killed, no more
+    spawn (the pool is six and dead ones are spent) — this is a known limit,
+    flag it only if it feels wrong in normal play.
+
+### Things round 6 changed that were working before
+
+15. **The town still reads and plays as it did in round 5** — signs, the
+    saloon, the door fade, the hitching rail, the townsfolk stroll. The sign
+    atlas grew by three cells and the frame order gained a duel branch; watch
+    for a shop sign gone blank or the door fade misbehaving.
+16. **The gunfight is unchanged.** Shooting bandits, targets and the reload all
+    work exactly as round 3/4. `combat.js` gained six lines (deputy hits); a
+    shot that used to land should still land.
+17. **Round 5's SMOKE-TEST item 15 said townsfolk are unarmed** — still true
+    for all but the two duelists, who now openly carry by design.

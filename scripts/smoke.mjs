@@ -2593,7 +2593,9 @@ const CHECKS = [
       const canvas = atlas.texture.image;
       const ctx = canvas.getContext('2d');
       const rows = [];
-      for (let i = 0; i < atlas.count; i++) {
+      // Only the shop-sign cells: round 6 appended three more for the bounty
+      // board's camp names, and those are checked by their own round-6 check.
+      for (let i = 0; i < BUILDINGS.length; i++) {
         // Sample the middle band of the cell, inside the painted border, and
         // count how many distinct luminances appear: a blank board is one.
         const y = i * SIGNS.cellHeight + Math.floor(SIGNS.cellHeight * 0.3);
@@ -2620,8 +2622,8 @@ const CHECKS = [
         width: canvas.width, height: canvas.height,
       };
     });
-    if (info.count !== info.buildings) return `${info.count} atlas cells for ${info.buildings} buildings`;
-    if (info.unique !== info.count) return `${info.unique} distinct UV rows for ${info.count} signs — some boards share a cell`;
+    if (info.count < info.buildings) return `${info.count} atlas cells for ${info.buildings} buildings`;
+    if (info.unique !== info.count) return `${info.unique} distinct UV rows for ${info.count} atlas cells — some boards share a cell`;
     for (const r of info.rows) {
       if (r.tones < 3) return `the "${r.name}" sign is a flat board (${r.tones} tones) — nothing was painted on it`;
       if (r.contrast < 60) return `the "${r.name}" sign's lettering has only ${r.contrast} levels of contrast against its board`;
@@ -2849,7 +2851,11 @@ const CHECKS = [
         geometries: geometries.size,
         sharedMaterials: materials.length - new Set(materials).size,
         meshCount,
-        armed: people.some((p) => p.character.weapon?.group.visible),
+        // Round 6: a `duelist` townsperson openly carries a revolver on purpose
+        // — that visible gun is how the player picks them out. Every OTHER
+        // citizen is still unarmed.
+        armed: people.some((p) => !p.isDuelist && p.character.weapon?.group.visible),
+        duelists: people.filter((p) => p.isDuelist).length,
       };
     });
     if (info.placeholder) { console.log('  (info) townsfolk are capsule placeholders — skipping the clone assertions'); return null; }
@@ -2858,7 +2864,8 @@ const CHECKS = [
     if (info.bones < info.people * 2) return `${info.bones} distinct bones across ${info.people} bodies — the rebind did not happen`;
     if (info.geometries > info.meshCount) return `geometry is not shared: ${info.geometries} buffers for ${info.meshCount} meshes per body`;
     if (info.sharedMaterials > 0) return `${info.sharedMaterials} materials are shared between townsfolk — one tint would recolour more than one body`;
-    if (info.armed) return 'a townsperson is carrying a visible revolver';
+    if (info.armed) return 'an ordinary townsperson is carrying a visible revolver';
+    if (info.duelists < 1) return 'no townsperson is flagged as a duelist — round 6 has no one to challenge';
     return null;
   }],
 
@@ -2943,6 +2950,15 @@ const CHECKS = [
       const first = folk.hit(victim, from.x, from.z);
       const healthAfterOne = victim.health.current;
       const second = folk.hit(victim, from.x, from.z);
+      // Round 6: those two hits are crimes, and the live loop would spawn
+      // deputies on them mid-suite. Stand the law back down — this check is
+      // about the shot landing, not the wanted level (that has its own check).
+      const dep = window.__debug.deputies;
+      if (dep) {
+        dep.stars = 0;
+        dep._crimesSeen = folk.crimeCount;
+        for (const x of dep.deputies) if (x.active) dep._park(x);
+      }
       return {
         chest, overhead, ignored, first, second, healthAfterOne,
         colliderGone: victim.collider === null,
@@ -3116,6 +3132,318 @@ const CHECKS = [
     if (!(info.calls > 0)) return 'draw calls read zero — nothing was rendered';
     if (info.calls > 120) return `${info.calls} draw calls looking down the main street, over BUILD-PLAN.md's ~120 budget`;
     console.log(`  (info) ${info.calls} draw calls looking down the main street`);
+    return null;
+  }],
+
+  // Round 6 — bounties, duels, wanted ---------------------------------------
+  ['the bounty board is parts in the town mesh, and its camp names are on the atlas', async () => {
+    // ADR-033's discipline, checked structurally: the board must NOT be a new
+    // mesh — its posts and panel go into the one opaque merge, its three camp
+    // names into the one sign atlas after the shop signs.
+    const info = await page.evaluate(async () => {
+      const { CAMPS } = await import('/src/config-ai.js');
+      const { BUILDINGS } = await import('/src/config-town.js');
+      const { colliders } = await import('/src/collision.js');
+      const t = window.__debug.town;
+      const named = [];
+      window.__debug.scene.traverse((o) => { if (o.isMesh && o.name.startsWith('town')) named.push(o.name); });
+      const board = colliders.find((c) => c.meta?.kind === 'bountyboard');
+      // Read the atlas cells the board points at: the same pixel readback the
+      // shop-sign check uses, so a blank board fails.
+      const { SIGNS } = await import('/src/config-town.js');
+      const ctx = t.signAtlas.texture.image.getContext('2d');
+      const tones = [];
+      for (let i = 0; i < CAMPS.length; i++) {
+        const cell = BUILDINGS.length + i;
+        const y = cell * SIGNS.cellHeight + Math.floor(SIGNS.cellHeight * 0.3);
+        const d = ctx.getImageData(SIGNS.padding, y, SIGNS.cellWidth - SIGNS.padding * 2, Math.floor(SIGNS.cellHeight * 0.4)).data;
+        const seen = new Set();
+        for (let p = 0; p < d.length; p += 4) seen.add(Math.round(d[p] * 0.299 + d[p + 1] * 0.587 + d[p + 2] * 0.114) >> 3);
+        tones.push(seen.size);
+      }
+      return {
+        meshes: named.length,
+        atlasCells: t.signAtlas.count,
+        wantCells: BUILDINGS.length + CAMPS.length,
+        hasBoardCollider: !!board,
+        boardFiniteTop: board ? Number.isFinite(board.top) : false,
+        hasTrigger: !!(t.bountyBoard && Number.isFinite(t.bountyBoard.x)),
+        tones,
+      };
+    });
+    if (info.meshes !== 3) return `${info.meshes} meshes named "town*" — the bounty board added one instead of being parts`;
+    if (info.atlasCells !== info.wantCells) return `atlas has ${info.atlasCells} cells, expected ${info.wantCells} (shops + camps)`;
+    if (!info.hasBoardCollider) return 'no bountyboard collider — you can walk through the board';
+    if (!info.boardFiniteTop) return 'the bounty board is an infinitely tall obstacle';
+    if (!info.hasTrigger) return 'town.bountyBoard has no read-trigger point';
+    if (info.tones.some((n) => n < 3)) return `a bounty cell is a flat board (tones ${JSON.stringify(info.tones)}) — no camp name painted`;
+    return null;
+  }],
+
+  ['accepting a bounty raises a marker over that camp; clearing it pays out at the board', async () => {
+    const info = await page.evaluate(async () => {
+      const { BOUNTY } = await import('/src/config-bounty.js');
+      const d = window.__debug;
+      const b = d.bounties;
+      const bandits = d.bandits;
+      const saved = {
+        money: b.money, active: b.activeIndex, states: b.states.slice(),
+        alive: bandits.camps[0].alive,
+        px: d.player.position.x, pz: d.player.position.z, pmount: d.player.mounted,
+      };
+      if (d.player.mounted) d.horse.handleMountToggle(d.player);
+      // Earlier checks may already have thinned camp 0 to zero — put men back
+      // so "not cleared yet" is a real state to assert.
+      bandits.camps[0].alive = Math.max(1, bandits.camps[0].count);
+
+      b.accept(0);
+      const accepted = { visible: b.markerVisible, state: b.states[0], markerX: b.marker.position.x };
+      b.update(1 / 60, d.player, bandits);
+      const beforeClear = b.states[0];
+
+      // Wipe the camp and let the board notice.
+      bandits.camps[0].alive = 0;
+      b.update(1 / 60, d.player, bandits);
+      const cleared = b.states[0];
+
+      // Stand at the board and collect.
+      d.player.position.set(b.board.x, d.player.world.groundHeightAt(b.board.x, b.board.z), b.board.z);
+      const reward = BOUNTY.rewards[0];
+      b.collectOrCycle();
+      const paid = { money: b.money, state: b.states[0], visible: b.markerVisible };
+
+      // restore
+      bandits.camps[0].alive = saved.alive;
+      b.money = saved.money;
+      b.activeIndex = -1;
+      b.list.forEach((row, i) => { row.state = saved.states[i]; });
+      b.marker.visible = false;
+      b.markerVisible = false;
+      d.player.position.set(saved.px, d.player.world.groundHeightAt(saved.px, saved.pz), saved.pz);
+      return { accepted, beforeClear, cleared, paid, reward, camp: { x: bandits.camps[0].x, z: bandits.camps[0].z } };
+    });
+    if (!info.accepted.visible) return 'accepting a bounty did not show the horizon marker';
+    if (info.accepted.state !== 'active') return `bounty 0 state is "${info.accepted.state}" after accept, expected "active"`;
+    if (Math.abs(info.accepted.markerX - info.camp.x) > 1) return `marker is at x=${info.accepted.markerX.toFixed(0)}, camp is at ${info.camp.x}`;
+    if (info.beforeClear !== 'active') return `bounty went to "${info.beforeClear}" before the camp was cleared`;
+    if (info.cleared !== 'cleared') return `a wiped camp left the bounty at "${info.cleared}", expected "cleared"`;
+    if (info.paid.state !== 'paid') return `collecting left the bounty at "${info.paid.state}"`;
+    if (info.paid.money !== info.reward) return `collected $${info.paid.money}, expected the $${info.reward} reward`;
+    if (info.paid.visible) return 'the marker stayed up after the bounty was collected';
+    return null;
+  }],
+
+  ['shooting a townsperson raises the wanted level; getting clear of town decays it', async () => {
+    const info = await page.evaluate(async () => {
+      const { WANTED } = await import('/src/config-bounty.js');
+      const { TOWN } = await import('/src/config.js');
+      const d = window.__debug;
+      const dep = d.deputies;
+      const folk = d.town.townsfolk;
+      const saved = { stars: dep.stars, seen: dep._crimesSeen, px: d.player.position.x, pz: d.player.position.z };
+      dep.stars = 0;
+      dep._crimesSeen = folk.crimeCount;
+      dep._decayT = 0;
+
+      const target = folk.people.find((p) => p.alive && p.health.current > 1);
+      const before = folk.crimeCount;
+      folk.hit(target, target.position.x + 3, target.position.z); // one round — a wounding, still a crime
+      const afterCrime = folk.crimeCount;
+      d.player.position.set(TOWN.centerX + 10, 0, TOWN.centerZ); // still in town
+      dep.update(1 / 60, d.player, folk);
+      const rose = dep.stars;
+
+      // Ride out and wait it down.
+      d.player.position.set(TOWN.centerX + WANTED.clearRadius + 60, 0, TOWN.centerZ);
+      d.player.position.y = d.player.world.groundHeightAt(d.player.position.x, d.player.position.z);
+      let decayed = rose;
+      for (let i = 0; i < 400 && dep.stars > 0; i++) {
+        dep.update(0.2, d.player, folk);
+        decayed = dep.stars;
+      }
+
+      dep.stars = 0;
+      dep._crimesSeen = folk.crimeCount;
+      dep._decayT = 0;
+      d.player.position.set(saved.px, d.player.world.groundHeightAt(saved.px, saved.pz), saved.pz);
+      void saved;
+      return { before, afterCrime, rose, decayed, per: WANTED.perCrime };
+    });
+    if (info.afterCrime !== info.before + 1) return `a round on a citizen moved crimeCount ${info.before} -> ${info.afterCrime}`;
+    if (!(info.rose >= info.per)) return `wanted level is ${info.rose} after shooting an innocent, expected at least ${info.per}`;
+    if (info.decayed !== 0) return `wanted level did not decay to 0 out of town — stuck at ${info.decayed}`;
+    return null;
+  }],
+
+  ['a wanted spike deploys deputies that hunt the player, and they stand down when it clears', async () => {
+    const info = await page.evaluate(async () => {
+      const { DEPUTY } = await import('/src/config-bounty.js');
+      const { TOWN } = await import('/src/config.js');
+      const d = window.__debug;
+      const dep = d.deputies;
+      const folk = d.town.townsfolk;
+      const saved = { stars: dep.stars, px: d.player.position.x, pz: d.player.position.z, seen: dep._crimesSeen };
+
+      d.player.position.set(TOWN.centerX, 0, TOWN.centerZ);
+      d.player.position.y = d.player.world.groundHeightAt(TOWN.centerX, TOWN.centerZ);
+      dep.stars = 2;
+      dep._crimesSeen = folk.crimeCount;
+      for (let i = 0; i < 30; i++) dep.update(1 / 60, d.player, folk);
+      const deployed = {
+        active: dep.activeCount,
+        alerted: dep.deputies.filter((x) => x.active && x.ai.alerted).length,
+        near: dep.deputies.filter((x) => x.active
+          && Math.hypot(x.position.x - d.player.position.x, x.position.z - d.player.position.z) < DEPUTY.spawnRadius + 20).length,
+      };
+
+      // Clear it and ride away.
+      dep.stars = 0;
+      d.player.position.set(TOWN.centerX + 400, 0, TOWN.centerZ);
+      d.player.position.y = d.player.world.groundHeightAt(d.player.position.x, d.player.position.z);
+      for (let i = 0; i < 200; i++) dep.update(0.1, d.player, folk);
+      const stoodDown = dep.activeCount;
+
+      dep.stars = 0;
+      dep._crimesSeen = folk.crimeCount;
+      for (const x of dep.deputies) if (x.active) dep._park(x);
+      d.player.position.set(saved.px, d.player.world.groundHeightAt(saved.px, saved.pz), saved.pz);
+      return { deployed, stoodDown, max: DEPUTY.maxActive };
+    });
+    if (!(info.deployed.active > 0)) return 'a 2-star wanted level deployed no deputies';
+    if (info.deployed.active > info.max) return `${info.deployed.active} deputies deployed, cap is ${info.max}`;
+    if (info.deployed.alerted < info.deployed.active) return 'a deployed deputy is not hunting the player';
+    if (info.deployed.near < 1) return 'deputies did not spawn near the player';
+    if (info.stoodDown !== 0) return `${info.stoodDown} deputies still active after the wanted level cleared`;
+    return null;
+  }],
+
+  ['the duel runs faceoff -> standoff -> draw, and a shot in the window is a clean kill with slow-mo', async () => {
+    const info = await page.evaluate(async () => {
+      const { HEALTH } = await import('/src/config-ai.js');
+      const d = window.__debug;
+      const duel = d.duel;
+      const folk = d.town.townsfolk;
+      const opp = folk.duelists.find((p) => p.alive);
+      if (!opp) return { noDuelist: true };
+      const savedHealth = d.player.health.current;
+      d.player.health.reset();
+      d.player.dead = false;
+
+      const began = duel.beginDuel(d.player, opp);
+      const phases = [duel.phase];
+      // faceoff then standoff — tick real-time until the draw signal
+      for (let i = 0; i < 200 && duel.phase !== 'draw'; i++) {
+        duel.update(0.2, d.player, d.tpCamera, d.deputies, folk);
+        if (phases[phases.length - 1] !== duel.phase) phases.push(duel.phase);
+      }
+      const reachedDraw = duel.phase === 'draw';
+      duel.pullTrigger(d.player, d.tpCamera); // _t ~= 0 at draw entry -> inside DUEL.window
+      const won = { phase: duel.phase, result: duel.result, oppAlive: opp.alive, timeScale: duel.timeScale };
+      // hold out through the slow-mo
+      let slowSeen = duel.timeScale < 1;
+      for (let i = 0; i < 60 && duel.phase !== 'idle'; i++) {
+        duel.update(0.2, d.player, d.tpCamera, d.deputies, folk);
+        if (duel.timeScale < 1) slowSeen = true;
+      }
+      const ended = { phase: duel.phase, timeScale: duel.timeScale, health: d.player.health.current, max: HEALTH.playerMax };
+
+      d.player.health.current = savedHealth;
+      return { began, phases, reachedDraw, won, slowSeen, ended };
+    });
+    if (info.noDuelist) return 'no living duelist to challenge';
+    if (!info.began) return 'beginDuel() was refused';
+    if (!info.phases.includes('faceoff') || !info.phases.includes('standoff')) {
+      return `duel skipped a phase: ${info.phases.join(' -> ')}`;
+    }
+    if (!info.reachedDraw) return `the duel never reached the draw signal (${info.phases.join(' -> ')})`;
+    if (info.won.result !== 'win' || info.won.phase !== 'resolved') return `a shot at the signal gave "${info.won.result}" (${info.won.phase})`;
+    if (info.won.oppAlive) return 'the opponent survived a clean kill';
+    if (!info.slowSeen || !(info.won.timeScale < 1)) return `no slow-motion on the winning shot (timeScale ${info.won.timeScale})`;
+    if (info.ended.phase !== 'idle') return `the duel never handed control back (stuck at "${info.ended.phase}")`;
+    if (info.ended.timeScale !== 1) return `slow-motion did not clear (timeScale ${info.ended.timeScale})`;
+    if (info.ended.health !== info.ended.max) return `a clean win cost the player health (${info.ended.health}/${info.ended.max})`;
+    return null;
+  }],
+
+  ['drawing during the stand-off loses the duel and costs health', async () => {
+    const info = await page.evaluate(async () => {
+      const { DUEL } = await import('/src/config-bounty.js');
+      const d = window.__debug;
+      const duel = d.duel;
+      const folk = d.town.townsfolk;
+      const opp = folk.duelists.find((p) => p.alive);
+      if (!opp) return { noDuelist: true };
+      const savedHealth = d.player.health.current;
+      d.player.health.reset();
+      d.player.dead = false;
+      const startHealth = d.player.health.current;
+
+      duel.beginDuel(d.player, opp);
+      // get to standoff, then jump the gun
+      for (let i = 0; i < 60 && duel.phase !== 'standoff'; i++) duel.update(0.2, d.player, d.tpCamera, d.deputies, folk);
+      const atStandoff = duel.phase === 'standoff';
+      duel.pullTrigger(d.player, d.tpCamera);
+      const lost = { phase: duel.phase, result: duel.result, health: d.player.health.current, oppAlive: opp.alive };
+      for (let i = 0; i < 40 && duel.phase !== 'idle'; i++) duel.update(0.2, d.player, d.tpCamera, d.deputies, folk);
+      const ended = { phase: duel.phase, cooldown: duel._cooldown };
+
+      d.player.health.current = savedHealth;
+      return { atStandoff, lost, ended, penalty: DUEL.penaltyDamage, start: startHealth };
+    });
+    if (info.noDuelist) return 'no living duelist to challenge';
+    if (!info.atStandoff) return 'the duel never reached the stand-off';
+    if (info.lost.result !== 'early' || info.lost.phase !== 'resolved') return `an early draw gave "${info.lost.result}" (${info.lost.phase})`;
+    if (info.lost.health !== info.start - info.penalty) return `an early draw cost ${info.start - info.lost.health} hits, expected ${info.penalty}`;
+    if (info.lost.oppAlive !== true) return 'the opponent should be left standing after an early draw';
+    if (info.ended.phase !== 'idle') return `the lost duel never ended (${info.ended.phase})`;
+    if (!(info.ended.cooldown > 0)) return 'no re-challenge cooldown after the duel';
+    return null;
+  }],
+
+  ['the face-off camera swings off the third-person rig and hands it back', async () => {
+    const info = await page.evaluate(async () => {
+      const d = window.__debug;
+      const duel = d.duel;
+      const folk = d.town.townsfolk;
+      const opp = folk.duelists.find((p) => p.alive);
+      if (!opp) return { noDuelist: true };
+      const savedHealth = d.player.health.current;
+      d.player.health.reset();
+      d.player.dead = false;
+
+      // A normal camera frame first.
+      d.tpCamera.update(1 / 60, d.player.position, 0, null);
+      const normal = { x: d.tpCamera.camera.position.x, y: d.tpCamera.camera.position.y, z: d.tpCamera.camera.position.z };
+
+      duel.beginDuel(d.player, opp);
+      for (let i = 0; i < 40 && duel.phase !== 'standoff'; i++) {
+        duel.update(0.15, d.player, d.tpCamera, d.deputies, folk);
+        d.tpCamera.setDuelShot(duel.cameraWeight, d.player.position.x, d.player.position.z, duel.opponentX, duel.opponentZ);
+        d.tpCamera.update(1 / 60, d.player.position, 0, null);
+      }
+      const during = {
+        weight: duel.cameraWeight,
+        moved: Math.hypot(d.tpCamera.camera.position.x - normal.x, d.tpCamera.camera.position.z - normal.z),
+      };
+
+      // Draw early to end it, then let the camera ease back.
+      duel.pullTrigger(d.player, d.tpCamera);
+      for (let i = 0; i < 60 && duel.phase !== 'idle'; i++) duel.update(0.2, d.player, d.tpCamera, d.deputies, folk);
+      for (let i = 0; i < 40; i++) {
+        duel.update(0.2, d.player, d.tpCamera, d.deputies, folk);
+        d.tpCamera.setDuelShot(duel.cameraWeight, d.player.position.x, d.player.position.z, duel.opponentX, duel.opponentZ);
+        d.tpCamera.update(1 / 60, d.player.position, 0, null);
+      }
+      const after = { weight: duel.cameraWeight };
+
+      d.player.health.current = savedHealth;
+      d.tpCamera.setDuelShot(0, 0, 0, 0, 0);
+      return { during, after };
+    });
+    if (info.noDuelist) return 'no living duelist to challenge';
+    if (!(info.during.weight > 0.5)) return `the duel camera weight only reached ${info.during.weight.toFixed(2)}`;
+    if (!(info.during.moved > 1)) return `the camera barely moved for the face-off (${info.during.moved.toFixed(2)}m) — the framing did not compose in`;
+    if (!(info.after.weight < 0.1)) return `the duel camera did not hand back (weight still ${info.after.weight.toFixed(2)})`;
     return null;
   }],
 ];

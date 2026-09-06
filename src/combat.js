@@ -59,7 +59,7 @@ export class Combat {
    *   BUILD-PLAN.md's "keep the game fully playable" rule applies to every
    *   round, and an unarmed rig took the whole boot down once already.
    */
-  constructor({ player, horse, camera, tpCamera, world, targets, bandits, townsfolk, vfx, audio, weapon }) {
+  constructor({ player, horse, camera, tpCamera, world, targets, bandits, townsfolk, deputies, vfx, audio, weapon }) {
     this.player = player;
     this.horse = horse;
     this.camera = camera;
@@ -68,6 +68,7 @@ export class Combat {
     this.targets = targets;
     this.bandits = bandits;
     this.townsfolk = townsfolk;
+    this.deputies = deputies; // round 6's lawmen — a separate group, same ray contract
     this.vfx = vfx;
     this.audio = audio;
     this.weapon = weapon;
@@ -103,6 +104,9 @@ export class Combat {
     // over someone's hat would "hit" them. `townsfolk.raycast()` tests the same
     // foot-to-head cylinder bandits.js does.
     if (townsfolk?.rayIgnore) for (const col of townsfolk.rayIgnore) this._ignore.add(col);
+    // ...and round 6's deputies, for the same `top: Infinity` reason. Their
+    // foot-to-head cylinder is tested by `deputies.raycast()` below.
+    if (deputies?.rayIgnore) for (const col of deputies.rayIgnore) this._ignore.add(col);
 
     this._hit = makeHit();
     this._aimHit = makeHit();
@@ -261,6 +265,7 @@ export class Combat {
     this.targets?.raycast(_muzzlePos, _dir, COMBAT.range, this._hit);
     this.bandits?.raycast(_muzzlePos, _dir, COMBAT.range, this._hit);
     this.townsfolk?.raycast(_muzzlePos, _dir, COMBAT.range, this._hit);
+    this.deputies?.raycast(_muzzlePos, _dir, COMBAT.range, this._hit);
     raycastColliders(_muzzlePos, _dir, COMBAT.range, this._ignore, this._hit);
     raycastTerrain(_muzzlePos, _dir, COMBAT.range, this._hit);
 
@@ -278,6 +283,7 @@ export class Combat {
     // A street of citizens who ignore gunfire reads as broken the same way a
     // camp that ignores it does. They run rather than fight.
     this.townsfolk?.hearShot(_muzzlePos.x, _muzzlePos.z);
+    this.deputies?.hearShot(_muzzlePos.x, _muzzlePos.z);
 
     if (this._hit.hit) {
       const groundY = this.world.groundHeightAt(this._hit.point.x, this._hit.point.z);
@@ -286,6 +292,7 @@ export class Combat {
       let outcome = null;
       if (this._hit.kind === 'bandit') outcome = this.bandits?.hit(this._hit.ref, _muzzlePos.x, _muzzlePos.z) ?? null;
       else if (this._hit.kind === 'townsfolk') outcome = this.townsfolk?.hit(this._hit.ref, _muzzlePos.x, _muzzlePos.z) ?? null;
+      else if (this._hit.kind === 'deputy') outcome = this.deputies?.hit(this._hit.ref, _muzzlePos.x, _muzzlePos.z) ?? null;
       else outcome = this.targets?.hit(this._hit.ref) ?? null;
       if (outcome === 'destroyed') {
         this.vfx?.burst(this._hit.point, this._hit.kind === 'bottle' ? 0x2f5e3a : 0x6d4a2a, groundY);
@@ -313,6 +320,7 @@ export class Combat {
     this.targets?.raycast(_camPos, _camDir, COMBAT.range, this._aimHit);
     this.bandits?.raycast(_camPos, _camDir, COMBAT.range, this._aimHit);
     this.townsfolk?.raycast(_camPos, _camDir, COMBAT.range, this._aimHit);
+    this.deputies?.raycast(_camPos, _camDir, COMBAT.range, this._aimHit);
     raycastColliders(_camPos, _camDir, COMBAT.range, this._ignore, this._aimHit);
     raycastTerrain(_camPos, _camDir, COMBAT.range, this._aimHit);
     if (this._aimHit.hit) _aimPoint.copy(this._aimHit.point);

@@ -49,6 +49,10 @@ export class Townsperson {
     this.animState = 'idle';
     this.state = 'idle';
     this.health = new Health(TOWNSFOLK.maxHealth);
+    // A duelist walks the street openly armed — that is the "marked NPC"
+    // BUILD-PLAN.md's duel calls for. `inDuel` hands the rig to duel.js.
+    this.isDuelist = !!spawn.duelist;
+    this.inDuel = false;
 
     // Registered once, mutated in place every frame, per the collision contract.
     this.collider = addCircleCollider(spawn.x, spawn.z, TOWNSFOLK.colliderRadius,
@@ -63,8 +67,9 @@ export class Townsperson {
     this._stuckFrom = new THREE.Vector3().copy(this.position);
 
     // Unarmed: the revolver character.js builds for every rig is simply not
-    // drawn. `setVisible` has existed since round 3 with no caller.
-    this.character.weapon?.setVisible(false);
+    // drawn. `setVisible` has existed since round 3 with no caller. A duelist
+    // keeps theirs shown — that visible gun is how the player picks them out.
+    if (!this.isDuelist) this.character.weapon?.setVisible(false);
     this.character.root.position.copy(this.position);
     this.character.root.rotation.y = this.yaw + TOWNSFOLK.meshYawOffset;
     // Posed once at construction, so someone never inside `activeRadius` still
@@ -116,6 +121,8 @@ export class Townsperson {
   }
 
   update(dt, player) {
+    // A challenge is running: duel.js owns this rig until it lets go.
+    if (this.inDuel) return;
     if (!this.alive) {
       // The clip plays out and clamps, then the body stops costing a posed
       // skeleton every frame — bandits.js's rule, minus the sinking, because a

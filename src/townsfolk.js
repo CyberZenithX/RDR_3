@@ -46,6 +46,10 @@ const _tint = new THREE.Color();
 export class Townsfolk {
   constructor({ scene, world, gltf }) {
     this.world = world;
+    // Every round the player lands on a citizen — a wounding as well as a kill —
+    // ticks this. deputies.js reads the delta for the wanted meter (ADR-038),
+    // which is how round 6's whole star system stays out of combat.js.
+    this._crimes = 0;
     /** Colliders that shots and line-of-sight checks pass through — see the header. */
     this.rayIgnore = new Set();
 
@@ -114,6 +118,16 @@ export class Townsfolk {
     return n;
   }
 
+  /** Running total of rounds put into a citizen — round 6's wanted meter reads this. */
+  get crimeCount() {
+    return this._crimes;
+  }
+
+  /** The citizens who will meet you in the street — see duel.js. */
+  get duelists() {
+    return this.people.filter((p) => p.isDuelist && p.alive);
+  }
+
   /** Every townsperson's state, for `window.__debug` and smoke.mjs. */
   get states() {
     return this.people.map((p) => p.state);
@@ -144,7 +158,9 @@ export class Townsfolk {
   /** A round landing on an innocent. Round 6's wanted level starts here. */
   hit(person, fromX, fromZ) {
     if (!person || !person.damage) return null;
-    return person.damage(HEALTH.playerDamage, fromX, fromZ);
+    const outcome = person.damage(HEALTH.playerDamage, fromX, fromZ);
+    if (outcome) this._crimes++; // a wounding counts, not only a kill
+    return outcome;
   }
 
   /** A gunshot at (x, z): everyone within earshot runs. */

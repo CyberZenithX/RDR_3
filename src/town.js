@@ -28,6 +28,7 @@ import { buildSignAtlas } from './signs.js';
 import { buildBuilding, buildSaloonInterior, signBoardSize } from './buildings.js';
 import { buildTownProps, StreetLamps } from './town-props.js';
 import { buildTownsfolk } from './townsfolk.js';
+import { buildBountyBoard, bountySignEntries } from './bounties.js';
 
 class Town {
   constructor(scene, world, townsfolk) {
@@ -40,7 +41,7 @@ class Town {
     // are the one part of the town with a `map`. Drawn BEFORE any building,
     // because it is what supplies each sign quad's UVs.
     const signs = new PartBuilder({ textured: true });
-    this.signAtlas = buildSignAtlas(BUILDINGS.map((spec) => {
+    const buildingEntries = BUILDINGS.map((spec) => {
       const size = signBoardSize(spec);
       return {
         // `signText` where the name alone does not say what the place IS.
@@ -48,13 +49,20 @@ class Town {
         background: spec.sign,
         aspect: size.w / size.h,
       };
-    }));
-    const ctx = { opaque, glass, signs, atlas: this.signAtlas };
+    });
+    // Round 6's bounty board shares the one atlas — its camp cells sit after
+    // the shop signs, at index `bountyAtlasBase + i`.
+    this.signAtlas = buildSignAtlas([...buildingEntries, ...bountySignEntries()]);
+    const ctx = { opaque, glass, signs, atlas: this.signAtlas, bountyAtlasBase: BUILDINGS.length };
 
     /** @type {object[]} every building's resolved placement, in BUILDINGS order. */
     this.buildings = BUILDINGS.map((spec, i) => buildBuilding(spec, ctx, i));
     this.saloon = this.buildings.find((b) => b.spec.interior) ?? null;
     if (this.saloon) buildSaloonInterior(this.saloon, ctx);
+    // The bounty board outside the sheriff's office — posts and panel into the
+    // opaque builder, three camp names into the sign builder, never a new mesh
+    // (ADR-033). `bountyBoard` is its read trigger, handed to main.js.
+    this.bountyBoard = buildBountyBoard(ctx, this.buildings);
     buildTownProps(ctx);
     this.lamps = new StreetLamps(scene, opaque);
 

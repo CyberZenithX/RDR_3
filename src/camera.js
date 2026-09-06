@@ -12,11 +12,14 @@
 import * as THREE from 'three';
 import { CAMERA, INPUT, PLAYER } from './config.js';
 import { HORSE } from './config-horse.js';
+import { DUEL } from './config-bounty.js';
 import { consumeMouseDelta } from './input.js';
 import { colliders } from './collision.js';
 import { heightAt } from './terrain.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
+const _duelPos = new THREE.Vector3();
+const _duelLook = new THREE.Vector3();
 
 /**
  * Closest distance along a segment (px,pz)+(dx,dz)*[0,len] to a Y-rotated box,
@@ -85,6 +88,10 @@ export class ThirdPersonCamera {
     this.aim = 0;
     this.baseFov = camera.fov;
     this._shake = 0;
+    // Round 6's face-off framing — composed by lerp, like aim and mounted.
+    this._duelW = 0;
+    this._duelA = new THREE.Vector3();
+    this._duelB = new THREE.Vector3();
 
     this._pivot = new THREE.Vector3();
     this._forward = new THREE.Vector3();
@@ -121,6 +128,40 @@ export class ThirdPersonCamera {
   /** @param {number} weight 0..1 aim blend, from combat.js. See `this.aim`. */
   setAiming(weight) {
     this.aim = THREE.MathUtils.clamp(weight, 0, 1);
+  }
+
+  /**
+   * The face-off framing. `weight` is duel.js's own 0..1 blend; `(ax,az)` and
+   * `(bx,bz)` are the two duellists on the ground. While weight > 0 the camera
+   * lerps from its ordinary damped position toward a shot square to the line
+   * between them — the same compose-by-lerp pattern setMounted/setAiming use,
+   * rather than a second camera object (ADR-037).
+   */
+  setDuelShot(weight, ax, az, bx, bz) {
+    this._duelW = THREE.MathUtils.clamp(weight ?? 0, 0, 1);
+    this._duelA.set(ax, 0, az);
+    this._duelB.set(bx, 0, bz);
+  }
+
+  _applyDuelShot() {
+    const dx = this._duelB.x - this._duelA.x;
+    const dz = this._duelB.z - this._duelA.z;
+    const len = Math.hypot(dx, dz) || 1;
+    const fx = dx / len;
+    const fz = dz / len;
+    const midX = (this._duelA.x + this._duelB.x) * 0.5;
+    const midZ = (this._duelA.z + this._duelB.z) * 0.5;
+    const groundY = heightAt(midX, midZ);
+    // Perpendicular to the line of fire, camera a touch behind the player end.
+    _duelPos.set(
+      midX + -fz * DUEL.camSide - fx * DUEL.camBack,
+      groundY + DUEL.camHeight,
+      midZ + fx * DUEL.camSide - fz * DUEL.camBack,
+    );
+    _duelLook.set(midX, groundY + DUEL.camLookHeight, midZ);
+    this.camera.position.lerp(_duelPos, this._duelW);
+    _duelLook.lerpVectors(this._lookTarget, _duelLook, this._duelW);
+    this.camera.lookAt(_duelLook);
   }
 
   /**
@@ -291,5 +332,9 @@ export class ThirdPersonCamera {
     this.getForward(this._forward);
     this._lookTarget.addScaledVector(this._forward, CAMERA.shoulderOffset);
     this.camera.lookAt(this._lookTarget);
+
+    // Round 6: swing toward the face-off shot last, over whatever the ordinary
+    // rig just produced, so entering and leaving a duel is a lerp not a cut.
+    if (this._duelW > 0.001) this._applyDuelShot();
   }
 }

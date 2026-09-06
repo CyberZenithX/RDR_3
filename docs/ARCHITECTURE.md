@@ -38,6 +38,12 @@ sRGB output, `PCFSoftShadowMap`), the async load sequence, and owns the
 
 **The per-frame order is load-bearing. Do not "simplify" it:**
 
+0. `duel.update(raw, …)` — **before everything, on the UNSCALED delta.** It
+   reads `F` and the fire button, runs the face-off state machine, and sets
+   `duel.timeScale`. The frame's working `dt` is then `raw * duel.timeScale`
+   (slow-mo). While `duel.freezesPlayer` is true, `main.js` calls
+   `duel.poseParticipants(dt, player)` **in place of** steps 2–4 and skips
+   step 1 — see [DECISIONS.md](DECISIONS.md) ADR-037.
 1. `combat.pollInput()` — reads the mouse and `R`, moves the aim blend, ticks
    the reload/cooldown timers. **Does not fire.** It runs first because step 2
    needs `combat.aiming` to decide how the horse steers.
@@ -60,11 +66,19 @@ sRGB output, `PCFSoftShadowMap`), the async load sequence, and owns the
    resolves before the return fire. Each bandit thinks, moves, poses its own
    rig and then fires from its own muzzle, in that order: the same rule step 6
    obeys for the player, applied per bandit inside one loop.
-8. `town.update(dt, player)` — after combat for the same reason step 7 is: a
+8. `deputies.update(dt, player, town.townsfolk)` — after `bandits.update()`,
+   because it reads `townsfolk.crimeCount` (which `combat.update()` in step 6
+   just brought current) to move the star meter, then deploys or stands down
+   its lawmen (ADR-036, ADR-038).
+9. `town.update(dt, player)` — after combat for the same reason step 7 is: a
    round fired at a citizen resolves before that citizen decides to run. Also
    ticks the street lamps and the saloon's door trigger, which reads the
    player's **final** position for this frame.
-9. `tpCamera.setMounted(...)` / `setAiming(...)` / `ui.setMounted(...)` /
+10. `bounties.update(dt, player, bandits)` — after `town.update()`: checks the
+    accepted camp's live `alive` count, handles the `B` key at the board, and
+    animates the horizon marker.
+11. `tpCamera.setMounted(...)` / `setAiming(...)` / `setDuelShot(...)` /
+    `ui.setMounted(...)` /
    `setAiming(...)` / `updateAmmo(...)` / `updateHealth(...)` /
    `updateDamageFlash(...)` / `setDead(...)` — called unconditionally every
    frame off live state; all idempotent, no edge detection.
@@ -424,6 +438,38 @@ swallows every round aimed at a mounted rider. Both are explicit cylinders —
 own ignore Set at construction. This is the same shape targets.js already uses
 for a bottle standing on a barrel lid (ADR-025).
 
+### Round 6 — bounties, duels, the wanted level
+
+`src/bounties.js` — `buildBountyBoard(ctx, buildings)` pushes the board's posts,
+panel and three painted camp names into the town's **shared** opaque and sign
+`PartBuilder`s at town-build time (parts, not a mesh — ADR-033); its collider is
+a box with a finite `top` so a shot passes over it. `Bounties` is the runtime:
+`money`, a per-camp `open → active → cleared → paid` state, `accept(i)` /
+`collectOrCycle()` (the `B` key at the board, edge-detected in `update()`), and
+the one mesh this file adds — a translucent unlit **beam + ring** over the
+accepted camp, two draw calls, `visible` only while a bounty is live. Reads the
+camp's kill state straight off `bandits.camps[i].alive`.
+
+`src/duel.js` — `Duel`, the scripted stand-and-draw (ADR-037).
+`idle → faceoff → standoff → draw → resolved`; `update(raw, …)` runs on the
+**unscaled** delta and sets `timeScale` (slow-mo on a win). `freezesPlayer` is
+true through every non-idle phase — `main.js` then calls
+`poseParticipants(dt, player)` in place of the horse/player update, turning both
+figures to face each other and posing idle legs under a rising gun. The outcome
+is the player's reaction time against `DUEL.window`, decided here; muzzle
+flashes and gunshots go straight to `vfx` / `audio` so no stray round can hit a
+bystander. `beginDuel()` / `pullTrigger()` are the ADR-011 test entry points.
+
+`src/deputies.js` — the wanted level and the lawmen. `stars` is moved off
+`townsfolk.crimeCount`'s delta (ADR-038) and decays by geometry (one per
+`WANTED.decayInterval` beyond `WANTED.clearRadius`; zero on death). Deputies are
+`Bandit` instances (ADR-036) built from `bandits.gltf`, parked at
+`(DEPUTY.parkX, DEPUTY.parkZ)` with `root.visible = false`, teleported in around
+the player on a spike and stood down — not killed — when it clears. `Deputies`
+is a `Bandit` `group` (its own `rayIgnore` / `raycast()` / `hit()` / `hearShot`
+/ `addCorpse`), so `combat.js` tests it exactly as it does `Bandits` and
+`Townsfolk` — six added lines. Not in `bandits.bandits`.
+
 ### Camera, input, UI
 
 `src/camera.js` — `ThirdPersonCamera`. Mouse orbit (yaw/pitch),
@@ -480,9 +526,15 @@ markup lives in `index.html` — the one exception is the ammo pips, built from
 plateau the town stands on — stays in `config.js`, because the plateau is a
 property of the terrain.
 
-`src/config-townsfolk.js` — `TOWNSFOLK`, and nothing else. The sixth config
-file, split from the one above on exactly the seam `config-ai.js` was cut on:
-the bandits are a system with their own file and so are the citizens.
+`src/config-townsfolk.js` — `TOWNSFOLK`, and nothing else (plus a `duelist`
+flag on two `spawns` from round 6). The sixth config file, split from the one
+above on exactly the seam `config-ai.js` was cut on: the bandits are a system
+with their own file and so are the citizens.
+
+`src/config-bounty.js` — `BOUNTY`, `DUEL`, `WANTED`, `DEPUTY`. The seventh
+config file (ADR-035): round 6's read/ride/fight/collect loop, the scripted
+duel, the star meter and the lawmen — one system's numbers. Deputy toughness is
+not here; it reuses `HEALTH.banditMax` from `config-ai.js` (ADR-036).
 
 `src/config-horse.js` — every horse tunable: `HORSE`, `HORSE_ANIM`,
 `HORSE_CLIP_CANDIDATES`, `HORSE_CLIP_REFERENCE_SPEED`, `RIDING_POSE`, `TACK`,
@@ -562,6 +614,10 @@ resolveCollisions(pos, radius, ignore, clearY)
   on the saloon's five walls), `'hitch'`, `'trough'`, `'crate'`, `'lamp'` and
   `'townsfolk'` (carrying `meta.person`). Lamps, crates, the rail and the trough
   all carry a real finite `top`; buildings and townsfolk keep `Infinity`.
+- Round 6 added `'bountyboard'` — one box with a real finite `top` (a shot
+  passes over it). Deputy movement colliders are `kind: 'bandit'` like a
+  camp bandit's; the six parked ones sit at `(DEPUTY.parkX, DEPUTY.parkZ)`
+  until a wanted spike deploys them.
 
 ---
 
@@ -660,6 +716,27 @@ resolveCollisions(pos, radius, ignore, clearY)
   `raycastTerrain` — the whole geometry query, reusable for bandit
   line-of-sight in round 4.
 
+**Round 6 surface**
+
+- `Town.bountyBoard` (`{x, z, readRadius}`) — the board's read trigger, handed
+  to `Bounties`. `town.signAtlas` now has `BUILDINGS.length + CAMPS.length`
+  cells; the bounty cells are at `bountyAtlasBase + i`.
+- `Bounties.money` / `states` / `accept(i)` / `collectOrCycle()` /
+  `markerVisible` / `update(dt, player, bandits)`.
+- `Townsfolk.crimeCount` (rounds put into a citizen — the wanted meter reads
+  its delta) / `duelists` (living `isDuelist` people). `Townsperson.isDuelist`
+  / `inDuel` (set by `duel.js`; `Townsperson.update()` early-returns while set).
+- `Deputies.stars` / `activeCount` / `states` / `raycast()` / `hit()` /
+  `hearShot()` / `update(dt, player, townsfolk)`. Same `group` contract
+  `Bandits` has, so `combat.js` folds `deputies.rayIgnore` into its ignore Set
+  and tests `deputies.raycast()` alongside `bandits.raycast()`.
+- `Duel.phase` / `freezesPlayer` / `timeScale` / `cameraWeight` / `hudState` /
+  `opponentX` / `opponentZ` / `poseParticipants(dt, player)` /
+  `beginDuel(player, opp)` / `pullTrigger(player, tpCamera)` (ADR-011 test
+  entry points).
+- `ThirdPersonCamera.setDuelShot(weight, ax, az, bx, bz)` — the face-off
+  framing, composed by lerp like `setMounted` / `setAiming` (ADR-037).
+
 **three.js version gotcha**: 0.160.0 does **not** have `THREE.MathUtils.damp`
 (added upstream later). `camera.js` hand-rolls exponential smoothing. Re-check
 before adding a `MathUtils.damp` call anywhere.
@@ -685,7 +762,9 @@ playerHealth  playerDead
 banditCounts  banditsAlive  banditStates    drawCalls
 townCounts   insideSaloon   screenFade
 townsfolkAlive   townsfolkStates   horseHitchMode
-targets  combat  bandits  town  renderer     (live object references)
+money  bountyStates  bountyMarkerVisible
+wantedStars  deputiesActive  duelPhase  duelTimeScale
+targets  combat  bandits  town  bounties  duel  deputies  renderer  (live refs)
 ```
 
 `renderer` is there so `renderer.info.render.calls` — BUILD-PLAN.md's ~120

@@ -70,12 +70,17 @@ export const TOWNSFOLK = {
     0xb9ad9a,
   ],
 
-  /** Where each one idles. Anchors, not paths — the wander is around these. */
+  /**
+   * Where each one idles. Anchors, not paths — the wander is around these.
+   * `duelist: true` marks a gunslinger: round 6's duel opponent, who walks the
+   * street openly armed (townsperson.js keeps their revolver shown) so the
+   * player can pick them out. Two of them, well apart.
+   */
   spawns: [
     { x: -9.0, z: 21, tint: 0 }, // on the saloon's boardwalk
-    { x: -5.5, z: -6, tint: 1 }, // outside the general store
+    { x: -5.5, z: -6, tint: 1, duelist: true }, // outside the general store
     { x: 9.0, z: 22, tint: 2 }, // outside the sheriff's office
     { x: 2.0, z: 8, tint: 3 }, // crossing the street
-    { x: -7.5, z: -27, tint: 4 }, // by the stable
+    { x: -7.5, z: -27, tint: 4, duelist: true }, // by the stable
   ],
 };

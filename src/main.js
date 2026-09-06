@@ -22,6 +22,9 @@ import { createAudio } from './audio.js';
 import { Combat } from './combat.js';
 import { buildBandits } from './bandits.js';
 import { buildTown } from './town.js';
+import { buildDeputies } from './deputies.js';
+import { Bounties } from './bounties.js';
+import { Duel } from './duel.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, RENDER.maxPixelRatio));
@@ -125,12 +128,25 @@ async function init() {
   window.__debug.banditCounts = bandits.counts;
   window.__debug.bandits = bandits; // debug hook, not read by gameplay code
 
+  // Round 6's lawmen — Bandit instances parked out of the world until a wanted
+  // level calls them (ADR-036). Built BEFORE Combat, which folds their ray-
+  // ignore set into its own the same way it does the bandits' and townsfolk's.
+  const deputies = await buildDeputies({ scene, world, vfx, audio, targets, horse, gltf: bandits.gltf });
+  window.__debug.deputies = deputies; // debug hook, not read by gameplay code
+
   const combat = new Combat({
-    player, horse, camera, tpCamera, world, targets, bandits, vfx, audio,
+    player, horse, camera, tpCamera, world, targets, bandits, deputies, vfx, audio,
     townsfolk: town.townsfolk,
     weapon: character.weapon,
   });
   window.__debug.combat = combat; // debug hook, not read by gameplay code
+
+  // Round 6's read/ride/fight/collect loop, and the scripted duel. Neither owns
+  // geometry beyond the bounty marker; the board itself is parts in town.mesh.
+  const bounties = new Bounties({ scene, world, board: town.bountyBoard });
+  const duel = new Duel({ vfx, audio });
+  window.__debug.bounties = bounties; // debug hook, not read by gameplay code
+  window.__debug.duel = duel; // debug hook, not read by gameplay code
 
   // Debug only: hidden until F2 (or ?tune). Builds no DOM until first opened.
   window.__debug.tuning = initTuning();
@@ -149,41 +165,55 @@ async function init() {
 
   const clock = new THREE.Clock();
   renderer.setAnimationLoop(() => {
-    const dt = Math.min(clock.getDelta(), RENDER.maxDeltaTime);
+    const raw = Math.min(clock.getDelta(), RENDER.maxDeltaTime);
 
     tpCamera.handleLook();
 
+    // The duel runs on REAL time — its tension timer must not slow itself — and
+    // it is what sets the slow-motion `timeScale` the rest of the world uses.
+    // While it owns the player (faceoff → resolved) main.js hands both rigs to
+    // duel.poseParticipants() in place of the horse/player update below.
+    duel.update(raw, player, tpCamera, deputies, town.townsfolk);
+    const dt = raw * duel.timeScale;
+
     // Combat's frame is split in two, and the split is load-bearing (see
     // combat.js's header). This half reads the mouse and R and moves the aim
-    // blend; it must run BEFORE horse.update(), which needs to know whether
-    // the rider is aiming before it decides how to steer.
-    combat.pollInput(dt);
+    // blend; it must run BEFORE horse.update(). Skipped while a duel owns the
+    // player — a nervous trigger finger must not put a real round into the
+    // street, so duel.js fires its own scripted shots instead.
+    if (!duel.freezesPlayer) combat.pollInput(dt);
 
     // A dead rider does not stay in the saddle. handleMountToggle is the
     // sanctioned public entry point (ADR-011) and it refuses mid-air, so this
     // simply retries next frame if the horse is over a jump.
     if (player.dead && player.mounted) horse.handleMountToggle(player);
 
-    // horse.js reads H (whistle) and E (mount/dismount) itself, and drives
-    // player.mounted via player.mount()/dismount() — see horse.js's header.
-    // `aiming` is passed in rather than reached for: horse.js has no combat
-    // awareness beyond this one flag.
-    horse.update(dt, tpCamera, player, combat.aiming);
-    if (player.mounted) {
-      // Read player.mounted fresh, *after* horse.update() — a same-frame
-      // dismount already wrote the drop-off position and must not be
-      // overwritten by a stale saddle sync. See docs/DECISIONS.md ADR-016.
-      player.setSaddle(horse.getSaddleTransform(_scratchSaddlePos));
+    if (duel.freezesPlayer) {
+      // The stand-and-draw: nobody moves, duel.js poses both figures and runs
+      // the slow-motion on the winning shot.
+      duel.poseParticipants(dt, player);
+    } else {
+      // horse.js reads H (whistle) and E (mount/dismount) itself, and drives
+      // player.mounted via player.mount()/dismount() — see horse.js's header.
+      // `aiming` is passed in rather than reached for: horse.js has no combat
+      // awareness beyond this one flag.
+      horse.update(dt, tpCamera, player, combat.aiming);
+      if (player.mounted) {
+        // Read player.mounted fresh, *after* horse.update() — a same-frame
+        // dismount already wrote the drop-off position and must not be
+        // overwritten by a stale saddle sync. See docs/DECISIONS.md ADR-016.
+        player.setSaddle(horse.getSaddleTransform(_scratchSaddlePos));
+      }
+      player.update(dt, tpCamera, combat);
     }
-    player.update(dt, tpCamera, combat);
 
     // After both rigs have been posed for this frame, so the straps land on
     // this frame's mouth and fists rather than last frame's.
     reins.update(player.mounted);
 
-    // The other half of combat's frame: the rig is now posed, so the muzzle is
-    // where it will be rendered and a shot can be fired from it. Firing in
-    // pollInput() would aim every shot from last frame's hand position.
+    // The other half of combat's frame: fires any shot queued in pollInput(),
+    // and always ticks vfx. During a duel nothing is queued, so this is just
+    // the vfx tick that animates duel.js's own muzzle flashes.
     combat.update(dt);
 
     // After combat, so the player's round resolves before the return fire. The
@@ -192,22 +222,33 @@ async function init() {
     // obeys for the player.
     bandits.update(dt, player);
 
+    // Round 6: the star meter reads town.townsfolk's crime tally — which
+    // combat.update() has just brought current — then deploys or stands down
+    // its lawmen. After combat, before the citizens react, same as the bandits.
+    deputies.update(dt, player, town.townsfolk);
+
     // After combat for the same reason the bandits are: a round fired at a
     // citizen resolves before that citizen decides to run. This also advances
-    // the lamps and the saloon's door trigger, which reads the player's final
-    // position for this frame.
+    // the lamps and the saloon's door trigger, and then the bounty board's
+    // read trigger and its horizon marker.
     town.update(dt, player);
+    bounties.update(dt, player, bandits);
 
     tpCamera.setMounted(player.mounted);
-    tpCamera.setAiming(combat.aimWeight);
+    tpCamera.setAiming(duel.freezesPlayer ? 0 : combat.aimWeight);
+    tpCamera.setDuelShot(duel.cameraWeight, player.position.x, player.position.z, duel.opponentX, duel.opponentZ);
     ui.setMounted(player.mounted);
-    ui.setAiming(combat.aimWeight);
+    ui.setAiming(duel.freezesPlayer ? 0 : combat.aimWeight);
     ui.updateAmmo(combat.ammo, combat.reloading);
     ui.updateHealth(player.health.current);
     ui.updateDamageFlash(player.damageFlash);
     ui.setDead(player.dead);
     ui.updateScreenFade(town.fade);
     ui.setPlaceName(town.label);
+    ui.updateMoney(bounties.money);
+    ui.updateWanted(deputies.stars);
+    ui.setBountyText(bounties.hudText);
+    ui.setDuel(duel.hudState);
     // While mounted, ignore the horse's own collider in the camera's
     // occlusion sweep — the rider's pivot sits right on/inside it, which
     // otherwise collapses the camera to CAMERA.minDistance every frame.
@@ -251,6 +292,13 @@ async function init() {
     window.__debug.townsfolkAlive = town.townsfolk?.aliveCount ?? 0;
     window.__debug.townsfolkStates = town.townsfolk?.states ?? [];
     window.__debug.horseHitchMode = horse.ai.mode;
+    window.__debug.money = bounties.money;
+    window.__debug.bountyStates = bounties.states;
+    window.__debug.bountyMarkerVisible = bounties.markerVisible;
+    window.__debug.wantedStars = deputies.stars;
+    window.__debug.deputiesActive = deputies.activeCount;
+    window.__debug.duelPhase = duel.phase;
+    window.__debug.duelTimeScale = duel.timeScale;
   });
 }
 

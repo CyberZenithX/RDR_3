@@ -127,6 +127,48 @@
     opacity: 0; transition: opacity 0.5s ease;
   }
   #placeLabel.visible { opacity: 0.85; }
+
+  /* Round 6 — money, wanted stars, the bounty line, the duel banner. */
+  #money {
+    position: fixed; right: 3vw; top: 3vh; pointer-events: none;
+    font: 600 22px/1 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    color: #f2c869; text-shadow: 0 1px 4px #000, 0 0 6px rgba(0, 0, 0, .5);
+    letter-spacing: .04em;
+  }
+  #wanted {
+    position: fixed; right: 3vw; top: calc(3vh + 30px); pointer-events: none;
+    display: flex; gap: 3px; opacity: 0; transition: opacity .3s ease;
+  }
+  #wanted.visible { opacity: 1; }
+  #wanted b {
+    font-size: 18px; line-height: 1; color: #3a2c1e;
+    text-shadow: 0 1px 2px #000; transition: color .2s ease, text-shadow .2s ease;
+  }
+  #wanted b.lit { color: #e8b23f; text-shadow: 0 0 8px rgba(232, 178, 63, .8), 0 1px 2px #000; }
+
+  #bountyText {
+    position: fixed; left: 50%; bottom: 11vh; transform: translateX(-50%);
+    font: 600 13px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    letter-spacing: .1em; text-transform: uppercase; color: #e8d9b8;
+    text-shadow: 0 1px 4px #000; pointer-events: none; white-space: nowrap;
+    opacity: 0; transition: opacity .4s ease;
+  }
+  #bountyText.visible { opacity: 0.9; }
+
+  #duelText {
+    position: fixed; left: 50%; top: 42%; transform: translate(-50%, -50%);
+    font: 700 20px/1.2 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    letter-spacing: .18em; text-transform: uppercase; color: #e8d9b8;
+    text-shadow: 0 2px 8px #000; pointer-events: none; text-align: center;
+    opacity: 0; transition: opacity .18s ease;
+  }
+  #duelText.visible { opacity: 0.95; }
+  #duelText.prompt { font-size: 15px; letter-spacing: .12em; color: #d9a441; top: 60%; }
+  #duelText.signal {
+    font-size: 52px; color: #e8703f; letter-spacing: .3em;
+    text-shadow: 0 0 24px rgba(232, 112, 63, .9), 0 2px 8px #000;
+  }
+  #duelText.result { font-size: 30px; color: #f2c869; }
 </style>
 </head>
 <body>
@@ -143,6 +185,7 @@
   <p class="hint">right mouse aim &middot; left mouse fire &middot; R reload &middot; mouse look &middot; Esc to release</p>
   <p class="hint">bandit camps are out past the ridge &mdash; two rounds drop a man, five drop you</p>
   <p class="hint">the town is down the street &mdash; push through the saloon doors, and leave the horse at the rail</p>
+  <p class="hint">B at the sheriff's board takes a bounty &middot; F challenges the armed man in the street &middot; don't shoot townsfolk</p>
 </div>
 
 <div id="damageFlash"></div>
@@ -157,6 +200,10 @@
 <div id="crosshair"><i></i><i></i><i></i><i></i><i></i></div>
 <div id="ammo"><span id="ammoPips"></span><span id="ammoCount">6</span></div>
 <div id="placeLabel"></div>
+<div id="money">$0</div>
+<div id="wanted"></div>
+<div id="bountyText"></div>
+<div id="duelText"></div>
 <div id="screenFade"></div>
 
 <script type="importmap">
